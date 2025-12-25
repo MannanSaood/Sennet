@@ -1,0 +1,50 @@
+[package]
+name = "sennet-agent"
+version = "0.1.0"
+edition = "2021"
+description = "Sennet network observability agent"
+authors = ["Sennet Team"]
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
+
+# HTTP client (sync, lighter than reqwest)
+ureq = { version = "2", features = ["json"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+# Protobuf (for ConnectRPC)
+prost = "0.13"
+
+# Retry with exponential backoff
+backoff = { version = "0.4", features = ["tokio"] }
+
+# UUID for agent identity
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Logging/Tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Directories for config/state paths
+dirs = "5"
+
+[dev-dependencies]
+tempfile = "3"
+mockito = "1"
+tokio-test = "0.4"
+
+[[bin]]
+name = "sennet"
+path = "src/main.rs"

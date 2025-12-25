@@ -1,0 +1,62 @@
+# ===== Rust =====
+# Build artifacts
+agent/target/
+**/target/
+**/*.rs.bk
+Cargo.lock
+
+# ===== Go =====
+# Build artifacts
+backend/sennet-server.exe
+backend/sennet-server
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# ===== Databases =====
+*.db
+*.db-shm
+*.db-wal
+sennet.db
+
+# ===== Config with secrets =====
+# Never commit config files with API keys!
+config.yaml
+sennet.yaml
+*.env
+.env
+.env.*
+
+# ===== IDE / Editor =====
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ===== OS =====
+Thumbs.db
+Desktop.ini
+
+# ===== Test artifacts =====
+coverage/
+*.test
+*.out
+
+# ===== Generated code (optional - uncomment if you want to regenerate) =====
+# gen/go/
+# gen/rust/
+
+# ===== Build / Deploy =====
+dist/
+*.tar.gz
+*.zip
+
+# ===== Temporary =====
+tmp/
+temp/
+*.tmp
+*.log
