@@ -1,0 +1,179 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.1.0)'
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Build the Go backend
+  build-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          
+      - name: Build backend
+        run: |
+          cd backend
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ../dist/sennet-server-linux-amd64 .
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o ../dist/sennet-server-linux-arm64 .
+          
+      - name: Upload backend artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend
+          path: dist/sennet-server-*
+
+  # Build the eBPF program (requires Linux)
+  build-ebpf:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+          
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libelf-dev
+          cargo install bpf-linker
+          
+      - name: Build eBPF
+        run: |
+          cd agent/sennet-ebpf
+          cargo +nightly build --target bpfel-unknown-none -Z build-std=core --release
+          
+      - name: Upload eBPF artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ebpf
+          path: agent/sennet-ebpf/target/bpfel-unknown-none/release/sennet-ebpf
+
+  # Build the Rust agent for multiple architectures
+  build-agent:
+    needs: build-ebpf
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            name: linux-amd64
+          - target: aarch64-unknown-linux-musl
+            name: linux-arm64
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download eBPF artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ebpf
+          path: agent/sennet-ebpf/target/bpfel-unknown-none/release/
+          
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          
+      - name: Install musl tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
+            sudo apt-get install -y gcc-aarch64-linux-gnu musl-dev
+          fi
+          
+      - name: Build agent
+        run: |
+          cd agent
+          cargo build --release --target ${{ matrix.target }}
+          mkdir -p ../dist
+          cp target/${{ matrix.target }}/release/sennet ../dist/sennet-${{ matrix.name }}
+          
+      - name: Strip binary
+        run: |
+          if [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then
+            strip dist/sennet-${{ matrix.name }} || true
+          else
+            aarch64-linux-gnu-strip dist/sennet-${{ matrix.name }} || true
+          fi
+          
+      - name: Upload agent artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-${{ matrix.name }}
+          path: dist/sennet-${{ matrix.name }}
+
+  # Create release with all artifacts
+  release:
+    needs: [build-backend, build-agent]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+          
+      - name: Create checksums
+        run: |
+          cd dist
+          sha256sum * > checksums.txt
+          cat checksums.txt
+          
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          fi
+          
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: Sennet v${{ steps.version.outputs.version }}
+          body: |
+            ## Sennet v${{ steps.version.outputs.version }}
+            
+            ### Downloads
+            
+            | File | Description |
+            |------|-------------|
+            | `sennet-linux-amd64` | Agent for Linux x86_64 |
+            | `sennet-linux-arm64` | Agent for Linux ARM64 |
+            | `sennet-server-linux-amd64` | Backend server for Linux x86_64 |
+            | `sennet-server-linux-arm64` | Backend server for Linux ARM64 |
+            
+            ### Quick Install
+            ```bash
+            curl -sSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | sudo bash
+            ```
+            
+            ### Checksums
+            See `checksums.txt` for SHA256 verification.
+          files: |
+            dist/*
+          draft: false
+          prerelease: false

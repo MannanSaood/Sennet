@@ -9,6 +9,7 @@ mod heartbeat;
 mod client;
 mod interface;
 mod ebpf;
+mod upgrade;
 
 use anyhow::Result;
 use tracing::{info, error, warn};
@@ -19,11 +20,58 @@ use crate::config::Config;
 use crate::identity::IdentityManager;
 use crate::heartbeat::HeartbeatLoop;
 use crate::client::SentinelClient;
+use crate::upgrade::Updater;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize tracing
     init_tracing();
+
+    // Check for CLI commands
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 {
+        match args[1].as_str() {
+            "upgrade" => {
+                info!("Checking for updates...");
+                let updater = Updater::new()?;
+                
+                match updater.check_upgrade()? {
+                    Some(version) => {
+                        info!("New version available: v{}", version);
+                        info!("Starting upgrade...");
+                        updater.upgrade()?;
+                        info!("Upgrade complete!");
+                    }
+                    None => {
+                        info!("Already at latest version v{}", upgrade::CURRENT_VERSION);
+                    }
+                }
+                return Ok(());
+            }
+            "version" | "--version" | "-v" => {
+                println!("sennet v{}", upgrade::CURRENT_VERSION);
+                return Ok(());
+            }
+            "help" | "--help" | "-h" => {
+                println!("Sennet Agent - Network Observability");
+                println!();
+                println!("USAGE:");
+                println!("    sennet [COMMAND]");
+                println!();
+                println!("COMMANDS:");
+                println!("    (none)     Run the agent");
+                println!("    upgrade    Check for and install updates");
+                println!("    version    Print version information");
+                println!("    help       Print this help message");
+                return Ok(());
+            }
+            _ => {
+                error!("Unknown command: {}", args[1]);
+                error!("Run 'sennet help' for usage");
+                std::process::exit(1);
+            }
+        }
+    }
 
     info!("Sennet Agent starting...");
 
