@@ -27,6 +27,9 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 # Parse arguments
 DRY_RUN=false
 VERSION=""
+API_KEY="${SENNET_API_KEY:-""}"
+SERVER_URL="${SENNET_SERVER_URL:-"https://sennet.onrender.com"}"
+
 while [[ $# -gt 0 ]]; do
     case $1 in
         --dry-run|-n)
@@ -35,6 +38,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --version|-v)
             VERSION="$2"
+            shift 2
+            ;;
+        --api-key|-k)
+            API_KEY="$2"
+            shift 2
+            ;;
+        --server-url|-s)
+            SERVER_URL="$2"
             shift 2
             ;;
         *)
@@ -156,15 +167,19 @@ if [[ ! -f "$CONFIG_DIR/config.yaml" ]]; then
     if [[ "$DRY_RUN" == "true" ]]; then
         info "[DRY-RUN] Would create config at: $CONFIG_DIR/config.yaml"
     else
-        cat > "$CONFIG_DIR/config.yaml" << 'EOF'
+        # Use provided API key or placeholder
+        CFG_API_KEY="${API_KEY:-"YOUR_API_KEY_HERE"}"
+        CFG_SERVER_URL="${SERVER_URL}"
+
+        cat > "$CONFIG_DIR/config.yaml" << EOF
 # Sennet Agent Configuration
 # See: https://github.com/your-org/sennet/docs/config_reference.md
 
 # Server URL (required)
-server_url: "https://your-server.example.com"
+server_url: "${CFG_SERVER_URL}"
 
 # API Key (required) - get from: sennet-server keygen --name "MyAgent"
-api_key: "YOUR_API_KEY_HERE"
+api_key: "${CFG_API_KEY}"
 
 # Log level: trace, debug, info, warn, error
 log_level: "info"
@@ -173,7 +188,11 @@ log_level: "info"
 # interface: "eth0"
 EOF
         chmod 600 "$CONFIG_DIR/config.yaml"
-        success "Created default config (edit $CONFIG_DIR/config.yaml)"
+        success "Created configuration file"
+        
+        if [[ -z "$API_KEY" ]]; then
+            warn "No API key provided. Please edit $CONFIG_DIR/config.yaml manually."
+        fi
     fi
 fi
 

@@ -10,26 +10,44 @@ This guide covers installing the Sennet agent on your Linux servers.
 
 ## Quick Install (One-Liner)
 
+To install and configure the agent in one go:
+
 ```bash
-curl -sSL https://raw.githubusercontent.com/your-org/sennet/main/install.sh | sudo bash
+# Replace sk_... with your actual API key
+curl -sSL https://raw.githubusercontent.com/MannanSaood/Sennet/main/install.sh | sudo bash -s -- --api-key "sk_your_key_here"
 ```
 
 This will:
+1. ✅ Install the agent binary
+2. ✅ Automatically configure it with your API key
+3. ✅ Start the service immediately
 
-1. ✅ Detect your system architecture
-2. ✅ Download the latest binary from GitHub Releases
-3. ✅ Verify SHA256 checksum
-4. ✅ Install to `/usr/local/bin/sennet`
-5. ✅ Create systemd service
-6. ✅ Create default configuration
+## Installation Methods
 
-## Manual Installation
-
-### 1. Download Binary
+### Option 1: Flags
 
 ```bash
-# For x86_64
-curl -LO https://github.com/your-org/sennet/releases/latest/download/sennet-linux-amd64
+curl -sSL https://raw.githubusercontent.com/MannanSaood/Sennet/main/install.sh | sudo bash -s -- \
+  --api-key "sk_your_key" \
+  --server-url "https://sennet.onrender.com"
+```
+
+### Option 2: Environment Variables
+
+```bash
+export SENNET_API_KEY="sk_your_key"
+curl -sSL https://raw.githubusercontent.com/MannanSaood/Sennet/main/install.sh | sudo -E bash
+```
+
+### Option 3: Interactive/Manual (Default)
+
+If you run without arguments, you'll need to edit the config manually:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/MannanSaood/Sennet/main/install.sh | sudo bash
+sudo nano /etc/sennet/config.yaml
+sudo systemctl restart sennet
+```
 
 # For ARM64  
 curl -LO https://github.com/your-org/sennet/releases/latest/download/sennet-linux-arm64

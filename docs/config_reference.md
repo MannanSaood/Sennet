@@ -4,7 +4,13 @@ The Sennet agent is configured via a YAML file located at `/etc/sennet/config.ya
 
 ## Quick Start
 
-Minimal configuration:
+The best way to configure the agent is to provide your API key during installation:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/MannanSaood/Sennet/main/install.sh | sudo bash -s -- --api-key "your_key"
+```
+
+Minimal manual configuration:
 
 ```yaml
 server_url: "https://your-server.example.com"
