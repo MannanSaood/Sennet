@@ -30,11 +30,36 @@ VERSION=""
 API_KEY="${SENNET_API_KEY:-""}"
 SERVER_URL="${SENNET_SERVER_URL:-"https://sennet.onrender.com"}"
 
+usage() {
+    echo "Sennet Agent Installer"
+    echo ""
+    echo "Usage: curl ... | sudo bash -s -- [options]"
+    echo ""
+    echo "Options:"
+    echo "  -k, --api-key KEY       API Key for agent authentication"
+    echo "  -s, --server-url URL    Control plane URL (default: https://sennet.onrender.com)"
+    echo "  -v, --version VER       Install a specific version"
+    echo "  -n, --dry-run           Show what would happen without making changes"
+    echo "  -h, --help              Show this help message"
+    echo ""
+    echo "Environment Variables:"
+    echo "  SENNET_API_KEY          Set default API key"
+    echo "  SENNET_SERVER_URL       Set default server URL"
+    echo ""
+    echo "Examples:"
+    echo "  sudo bash install.sh --api-key \"sk_...\""
+    echo "  sudo bash install.sh --dry-run"
+}
+
 while [[ $# -gt 0 ]]; do
     case $1 in
         --dry-run|-n)
             DRY_RUN=true
             shift
+            ;;
+        --help|-h)
+            usage
+            exit 0
             ;;
         --version|-v)
             VERSION="$2"
