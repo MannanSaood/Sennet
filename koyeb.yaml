@@ -1,0 +1,37 @@
+name: sennet-backend
+type: web
+
+# Build configuration
+build:
+  dockerfile:
+    dockerfile: backend/Dockerfile
+    
+# Deployment configuration  
+deploy:
+  regions:
+    - fra  # Frankfurt (free tier supported)
+  instance_types:
+    - free  # Use free tier
+  
+  # Health check
+  health_checks:
+    - port: 8080
+      path: /health
+      protocol: http
+      
+  # Environment variables
+  env:
+    - key: PORT
+      value: "8080"
+    - key: LATEST_VERSION
+      value: "1.0.0"
+      
+  # Port configuration
+  ports:
+    - port: 8080
+      protocol: http
+      
+  # Scaling (free tier = 1 instance)
+  scaling:
+    min: 1
+    max: 1

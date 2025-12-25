@@ -1,0 +1,11 @@
+# buf.yaml - Buf workspace configuration for Sennet
+version: v2
+modules:
+  - path: proto
+    name: buf.build/sennet/sentinel
+lint:
+  use:
+    - STANDARD
+breaking:
+  use:
+    - FILE

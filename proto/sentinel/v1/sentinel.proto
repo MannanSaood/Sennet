@@ -1,0 +1,47 @@
+// Sennet - Sentinel Network Protocol
+// API contract for agent-to-server communication
+
+syntax = "proto3";
+
+package sentinel.v1;
+
+option go_package = "gen/go/sentinel/v1;sentinelv1";
+
+// Command types issued by the server to agents
+enum Command {
+  COMMAND_UNSPECIFIED = 0;
+  COMMAND_NOOP = 1;        // No action required
+  COMMAND_UPGRADE = 2;     // Agent should download and install new version
+  COMMAND_RECONFIGURE = 3; // Agent should fetch new configuration
+}
+
+// Summary of metrics collected by the agent
+message MetricsSummary {
+  uint64 rx_packets = 1;
+  uint64 rx_bytes = 2;
+  uint64 tx_packets = 3;
+  uint64 tx_bytes = 4;
+  uint64 drop_count = 5;
+  uint64 uptime_seconds = 6;
+}
+
+// Heartbeat request sent by agents to the control plane
+message HeartbeatRequest {
+  string agent_id = 1;           // Unique UUID of the agent
+  string current_version = 2;    // Current agent version (semver)
+  MetricsSummary metrics = 3;    // Latest metrics snapshot
+}
+
+// Heartbeat response from the control plane
+message HeartbeatResponse {
+  Command command = 1;           // Action the agent should take
+  string latest_version = 2;     // Latest available agent version
+  string config_hash = 3;        // Hash of current config (for change detection)
+}
+
+// SentinelService - Core RPC service for agent communication
+service SentinelService {
+  // Heartbeat - Periodic check-in from agents
+  // Agents send metrics and receive commands
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+}

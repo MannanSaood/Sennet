@@ -1,0 +1,165 @@
+{
+    "project_metadata": {
+        "name": "Sennet (Sentinel Network)",
+        "version": "1.0.1-stable",
+        "constraints": {
+            "min_kernel": "5.15",
+            "arch": [
+                "x86_64",
+                "aarch64"
+            ],
+            "privilege": "root (required for eBPF)"
+        },
+        "stack": {
+            "agent": "Rust (Aya, Tokio, RingBuf, PerCpuArray)",
+            "backend": "Go (ConnectRPC, SQLite)",
+            "observability": "OpenTelemetry (OTLP) -> Grafana Cloud",
+            "docs": "MkDocs (Material Theme)"
+        },
+        "paths": {
+            "config": "/etc/sennet/config.yaml",
+            "state": "/var/lib/sennet/state.json"
+        }
+    },
+    "execution_plan": [
+        {
+            "phase_id": 1,
+            "title": "Foundation & Control Plane",
+            "objective": "Build a secure, dual-protocol control plane and a resilient agent skeleton.",
+            "steps": [
+                {
+                    "id": "1.1",
+                    "task": "Buf & ConnectRPC Definition",
+                    "context": "Define the API contract. Use ConnectRPC for easy HTTP debugging.",
+                    "actions": [
+                        "Install 'buf'. Run `buf mod init`.",
+                        "Create `proto/sentinel/v1/sentinel.proto`.",
+                        "Define `Heartbeat` RPC.",
+                        "   - Request: `{agent_id, current_version, metrics_summary}`",
+                        "   - Response: `{command: ENUM(NOOP, UPGRADE, RECONFIGURE), latest_version, config_hash}`",
+                        "Generate Go and Rust stubs."
+                    ],
+                    "validation": "Output files exist in `gen/go` and `gen/rust`."
+                },
+                {
+                    "id": "1.2",
+                    "task": "Go Backend & Auth Middleware",
+                    "context": "Server must handle state and enforce API keys.",
+                    "actions": [
+                        "Setup Go ConnectRPC server with `modernc.org/sqlite`.",
+                        "Implement Middleware: Intercept requests, extract `Authorization: Bearer <key>`, validate against DB.",
+                        "Implement `POST /Heartbeat` handler logic: Compare `req.current_version` vs `latest_version` to issue `UPGRADE` command.",
+                        "Create 'admin mode' flag: `sennet-server keygen --name 'Test'` prints a new API key.",
+                        "Deploy Dockerfile to Fly.io/Railway."
+                    ],
+                    "validation": "Curl without key returns 401. Curl with key returns 200."
+                },
+                {
+                    "id": "1.3",
+                    "task": "Rust Agent Skeleton & Config",
+                    "context": "Agent must handle config loading and network failures.",
+                    "actions": [
+                        "Define `Config` struct (serde_yaml) for `/etc/sennet/config.yaml`.",
+                        "   - Schema: `{ api_key: string, server_url: string, log_level: string, interface: Option<string> }`",
+                        "Implement `IdentityManager`: Load/Save UUID to `/var/lib/sennet`.",
+                        "Implement Main Loop: Use `backoff` crate to retry Heartbeats on failure.",
+                        "Implement Graceful Shutdown: On `SIGTERM`, log message and exit clean."
+                    ],
+                    "validation": "Agent starts, reads config, connects to backend, and retries if backend is killed."
+                }
+            ]
+        },
+        {
+            "phase_id": 2,
+            "title": "The eBPF Core (RingBuf & Counters)",
+            "objective": "High-performance packet analysis on modern kernels.",
+            "steps": [
+                {
+                    "id": "2.1",
+                    "task": "eBPF TC Classifier & Maps",
+                    "context": "Target Kernel 5.15+. Use RingBuf for events, Maps for counters.",
+                    "actions": [
+                        "Scaffold Aya project with `tc` type.",
+                        "Define `PerCpuArray` Map named `TRAFFIC_STATS` to count: `{rx_packets, rx_bytes, drop_count}`.",
+                        "Define `RingBuf` Map named `EVENTS` for TCP Flags (SYN/RST).",
+                        "Write eBPF C/Rust logic: Increment Map counters on every packet. Write to RingBuf only on interesting flags.",
+                        "Rust User-space: Async read from RingBuf (logs) and poll Maps every 10s (metrics)."
+                    ],
+                    "validation": "Dashboard shows 'Packets/sec' (from Maps) and 'Connection Refused' logs (from RingBuf) simultaneously."
+                },
+                {
+                    "id": "2.2",
+                    "task": "Interface Auto-Discovery",
+                    "context": "Don't hardcode eth0.",
+                    "actions": [
+                        "Use `pnet` or `netnetlink` to find the interface with the default route.",
+                        "Attach TC program to that interface ingress and egress."
+                    ],
+                    "validation": "Agent works on a VM where the main interface is `ens5`."
+                }
+            ]
+        },
+        {
+            "phase_id": 3,
+            "title": "Distribution Pipeline",
+            "objective": "Automated, verified releases.",
+            "steps": [
+                {
+                    "id": "3.1",
+                    "task": "Cross-Compile & Checksum",
+                    "context": "Build for x86 and ARM. Generate SHA256.",
+                    "actions": [
+                        "GH Actions: Build `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`.",
+                        "Run `sha256sum * > SHA256SUMS`.",
+                        "Upload binaries + checksum file to GitHub Releases."
+                    ],
+                    "validation": "Downloadable assets exist for both architectures."
+                },
+                {
+                    "id": "3.2",
+                    "task": "Self-Updater & Installer",
+                    "context": "Atomic upgrades with rollback safety.",
+                    "actions": [
+                        "Write `install.sh`: Downloads binary, checks SHA256, creates systemd service.",
+                        "Implement `sennet upgrade` in Rust:",
+                        "   1. Download new binary to `/tmp/sennet_new`.",
+                        "   2. Calculate SHA256 of downloaded file. IF mismatch -> Abort & Log Error.",
+                        "   3. Use `std::fs::rename` (atomic move) to overwrite `/usr/local/bin/sennet`. (Note: Linux allows replacing running binary).",
+                        "   4. Trigger `systemctl restart sennet`."
+                    ],
+                    "validation": "Running `sennet upgrade` successfully replaces the executable and restarts safely."
+                }
+            ]
+        },
+        {
+            "phase_id": 4,
+            "title": "Operations & Launch",
+            "objective": "Documentation and Observability setup.",
+            "steps": [
+                {
+                    "id": "4.1",
+                    "task": "Grafana Dashboard as Code",
+                    "context": "Don't build graphs manually. Commit them.",
+                    "actions": [
+                        "Create `dashboards/overview.json`.",
+                        "Define panels for: `Packets/sec` (from Map), `Drop Rate` (from Map), `Anomalies` (from RingBuf).",
+                        "Instructions to import this JSON into Grafana Cloud."
+                    ],
+                    "validation": "Importing the JSON creates a working dashboard."
+                },
+                {
+                    "id": "4.2",
+                    "task": "Documentation Site",
+                    "context": "Public facing docs for installation.",
+                    "actions": [
+                        "Initialize MkDocs with Material Theme.",
+                        "Write `docs/install.md` (The One-Liner).",
+                        "Write `docs/config_reference.md` (Documenting the YAML schema).",
+                        "Configure GH Actions to deploy to GitHub Pages."
+                    ],
+                    "validation": "Documentation site is live at `yourname.github.io/sennet`."
+                }
+            ]
+        }
+    ]
+}

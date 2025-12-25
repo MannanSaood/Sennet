@@ -1,0 +1,19 @@
+# buf.gen.yaml - Code generation configuration for Sennet
+version: v2
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/sennet/sennet/gen/go
+plugins:
+  # Go code generation with ConnectRPC
+  - remote: buf.build/protocolbuffers/go
+    out: gen/go
+    opt: paths=source_relative
+  - remote: buf.build/connectrpc/go
+    out: gen/go
+    opt: paths=source_relative
+
+  # Rust code generation with prost (tonic will be added via build.rs in agent)
+  - remote: buf.build/community/neoeinstein-prost
+    out: gen/rust
