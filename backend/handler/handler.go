@@ -9,6 +9,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/sennet/sennet/backend/db"
+	"github.com/sennet/sennet/backend/metrics"
 	sentinelv1 "github.com/sennet/sennet/gen/go/sentinel/v1"
 )
 
@@ -39,13 +40,24 @@ func (h *SentinelHandler) Heartbeat(
 ) (*connect.Response[sentinelv1.HeartbeatResponse], error) {
 	agentID := req.Msg.AgentId
 	currentVersion := req.Msg.CurrentVersion
-	metrics := req.Msg.Metrics
+	agentMetrics := req.Msg.Metrics
 
 	// Log the heartbeat
 	log.Printf("Heartbeat from agent %s (v%s)", agentID, currentVersion)
-	if metrics != nil {
+	if agentMetrics != nil {
 		log.Printf("  Metrics: rx=%d tx=%d drops=%d uptime=%ds",
-			metrics.RxPackets, metrics.TxPackets, metrics.DropCount, metrics.UptimeSeconds)
+			agentMetrics.RxPackets, agentMetrics.TxPackets, agentMetrics.DropCount, agentMetrics.UptimeSeconds)
+		
+		// Update Prometheus metrics
+		metrics.UpdateAgentMetrics(
+			agentID,
+			agentMetrics.RxPackets,
+			agentMetrics.TxPackets,
+			agentMetrics.RxBytes,
+			agentMetrics.TxBytes,
+			agentMetrics.DropCount,
+			agentMetrics.UptimeSeconds,
+		)
 	}
 
 	// Update agent in database

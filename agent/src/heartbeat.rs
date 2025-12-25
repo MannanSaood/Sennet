@@ -5,7 +5,7 @@
 use anyhow::Result;
 use backoff::ExponentialBackoff;
 use std::time::{Duration, Instant};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::client::{Command, HeartbeatRequest, MetricsSummary, SentinelClient};
 use crate::config::Config;

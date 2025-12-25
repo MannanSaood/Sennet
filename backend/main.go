@@ -17,6 +17,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/sennet/sennet/backend/db"
 	"github.com/sennet/sennet/backend/handler"
+	"github.com/sennet/sennet/backend/metrics"
 	"github.com/sennet/sennet/backend/middleware"
 
 	"github.com/sennet/sennet/gen/go/sentinel/v1/sentinelv1connect"
@@ -82,6 +83,10 @@ func runServer(port, dbPath, latestVersion string) {
 	log.Printf("  Database: %s", dbPath)
 	log.Printf("  Latest Version: %s", latestVersion)
 
+	// Initialize Prometheus metrics
+	metrics.Init()
+	log.Printf("  Prometheus metrics: enabled")
+
 	// Initialize database
 	database, err := db.New(dbPath)
 	if err != nil {
@@ -110,6 +115,10 @@ func runServer(port, dbPath, latestVersion string) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ok"}`))
 	})
+
+	// Prometheus metrics endpoint (no auth required)
+	mux.Handle("/metrics", metrics.Handler())
+	log.Printf("  Metrics endpoint: GET http://localhost:%s/metrics", port)
 
 	// ConnectRPC handler with auth middleware
 	path, connectHandler := sentinelv1connect.NewSentinelServiceHandler(
