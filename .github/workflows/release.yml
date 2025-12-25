@@ -96,8 +96,11 @@ jobs:
           
       - name: Build agent (Static Binary)
         run: |
+          # Copy eBPF binary to expected location for embed_bpf feature
+          cp agent/sennet-ebpf/target/bpfel-unknown-none/release/sennet-ebpf agent/src/sennet-ebpf
+          
           cd agent
-          cross build --release --target ${{ matrix.target }}
+          cross build --release --target ${{ matrix.target }} --features embed_bpf
           mkdir -p ../dist
           cp target/${{ matrix.target }}/release/sennet ../dist/sennet-${{ matrix.name }}
           

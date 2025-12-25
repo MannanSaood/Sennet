@@ -5,6 +5,10 @@ edition = "2021"
 description = "Sennet network observability agent"
 authors = ["Sennet Team"]
 
+[features]
+default = []
+embed_bpf = []
+
 [dependencies]
 # Async runtime
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }

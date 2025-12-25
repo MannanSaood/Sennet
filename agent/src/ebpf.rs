@@ -42,6 +42,12 @@ impl EbpfManager {
         tracing::info!("Loading eBPF programs...");
         
         // Load the eBPF binary (must be built previously)
+        // Load the eBPF binary
+        // During CI/Cross build, we copy the binary to agent/src/sennet-ebpf
+        #[cfg(feature = "embed_bpf")]
+        let mut bpf = Bpf::load(include_bytes!("sennet-ebpf"))?;
+        
+        #[cfg(not(feature = "embed_bpf"))]
         let mut bpf = Bpf::load(include_bytes!("../../sennet-ebpf/target/bpfel-unknown-none/release/sennet-ebpf"))?;
         
         // Pin path for maps
