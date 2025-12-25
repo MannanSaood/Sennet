@@ -1,0 +1,17 @@
+# Render.com deployment configuration
+services:
+  - type: web
+    name: sennet-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: .
+    plan: free
+    region: oregon
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 8080
+      - key: LATEST_VERSION
+        value: 1.0.0
+      - key: INIT_API_KEY
+        sync: false  # Set manually in dashboard for security
