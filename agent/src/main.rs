@@ -1,12 +1,14 @@
 //! Sennet Agent - Network Observability Agent
 //!
 //! This agent connects to the Sennet control plane, sends heartbeats,
-//! and will eventually run eBPF programs for packet analysis.
+//! and runs eBPF programs for packet analysis.
 
 mod config;
 mod identity;
 mod heartbeat;
 mod client;
+mod interface;
+mod ebpf;
 
 use anyhow::Result;
 use tracing::{info, error, warn};
@@ -46,6 +48,18 @@ async fn main() -> Result<()> {
         Err(e) => {
             error!("Failed to initialize identity: {}", e);
             return Err(e);
+        }
+    };
+
+    // Discover network interface
+    let interface = match interface::discover_default_interface(config.interface.as_deref()) {
+        Ok(iface) => {
+            info!("Network interface: {}", iface);
+            iface
+        }
+        Err(e) => {
+            warn!("Interface discovery failed: {}. eBPF will be disabled.", e);
+            String::new()
         }
     };
 

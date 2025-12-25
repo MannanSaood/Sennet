@@ -184,6 +184,10 @@ mod tests {
 
     #[test]
     fn test_load_valid_config() {
+        // Clear any env vars that might interfere
+        std::env::remove_var("SENNET_API_KEY");
+        std::env::remove_var("SENNET_SERVER_URL");
+        
         let dir = TempDir::new().unwrap();
         let config_content = r#"
 api_key: sk_test123456789
