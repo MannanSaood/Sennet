@@ -43,9 +43,9 @@ impl EbpfManager {
         
         // Load the eBPF binary (must be built previously)
         // Load the eBPF binary
-        // During CI/Cross build, we copy the binary to agent/src/sennet_ebpf.bin
+        // During CI/Cross build, build.rs copies binary to OUT_DIR/sennet_ebpf.bin
         #[cfg(feature = "embed_bpf")]
-        let mut bpf = Bpf::load(include_bytes!("sennet_ebpf.bin"))?;
+        let mut bpf = Bpf::load(include_bytes!(concat!(env!("OUT_DIR"), "/sennet_ebpf.bin")))?;
         
         #[cfg(not(feature = "embed_bpf"))]
         let mut bpf = Bpf::load(include_bytes!("../../sennet-ebpf/target/bpfel-unknown-none/release/sennet-ebpf"))?;
