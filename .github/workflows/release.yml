@@ -105,7 +105,20 @@ jobs:
           echo "Debugging: Verifying file placement"
           ls -l agent/src/sennet_ebpf.bin
           
+          
           cd agent
+          # Pass env var to cross via CROSS_ENV_SENNET_EBPF_BINARY (if cross supports it) -> No, cross passes all vars?
+          # Cross creates a container. We need to mount the file? 
+          # Actually, if the file is in `agent/src/sennet_ebpf.bin` (host), and we mount $(pwd) which is agent/, then the path relative to Cargo.toml is `src/sennet_ebpf.bin`.
+          
+          # Strategy: Use local file in src folder, build.rs finds it.
+          # SENNET_EBPF_BINARY env var needs to point to something accessible in container.
+          
+          # Let's simplify: Copy binary to `agent/sennet_ebpf.bin` (root of crate).
+          # Set SENNET_EBPF_BINARY="sennet_ebpf.bin".
+          # build.rs reads it, copies to OUT_DIR.
+          
+          export SENNET_EBPF_BINARY="src/sennet_ebpf.bin" 
           cross build --release --target ${{ matrix.target }} --features embed_bpf
           mkdir -p ../dist
           cp target/${{ matrix.target }}/release/sennet ../dist/sennet-${{ matrix.name }}
