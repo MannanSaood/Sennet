@@ -11,6 +11,7 @@ mod interface;
 mod ebpf;
 mod upgrade;
 mod status;
+mod tui;
 
 use anyhow::Result;
 use tracing::{info, error, warn};
@@ -51,6 +52,10 @@ async fn main() -> Result<()> {
             }
             "status" => {
                 status::run()?;
+                return Ok(());
+            }
+            "top" => {
+                tui::run()?;
                 return Ok(());
             }
             "version" | "--version" | "-v" => {

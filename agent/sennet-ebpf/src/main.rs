@@ -82,10 +82,18 @@ fn emit_large_packet_event(_ctx: &TcContext, size: u32) -> Result<(), ()> {
         unsafe {
             (*event).event_type = 1; // LargePacket
             (*event).size = size;
-            // TODO: Parse IP header to get src/dst
-            (*event).src_ip = 0;
-            (*event).dst_ip = 0;
-            (*event).protocol = 0;
+            
+            // Simple IPv4 parsing (assuming Ethernet header is 14 bytes)
+            // Offset 14+12=26 (Src IP), 14+16=30 (Dst IP)
+            // Note: In real world, need to check EthType and proper bounds
+            let src_offset = 14 + 12; // Eth(14) + IP_Offset(12)
+            let dst_offset = 14 + 16;
+            
+            // Default to 0 if we can't read
+            (*event).src_ip = _ctx.load(src_offset).unwrap_or(0);
+            (*event).dst_ip = _ctx.load(dst_offset).unwrap_or(0);
+            (*event).protocol = _ctx.load(14 + 9).unwrap_or(0); // Protocol at offset 9
+            
             (*event)._pad = [0; 3];
         }
         entry.submit(0);
