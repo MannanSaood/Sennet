@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// GitHub repository for releases
-const GITHUB_REPO: &str = "your-org/sennet";
+const GITHUB_REPO: &str = "MannanSaood/Sennet";
 
 /// Current version of the agent
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");

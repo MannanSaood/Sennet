@@ -5,7 +5,7 @@
 set -e
 
 # Configuration
-REPO="your-org/sennet"
+REPO="MannanSaood/Sennet"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/sennet"
 STATE_DIR="/var/lib/sennet"
