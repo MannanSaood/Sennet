@@ -96,8 +96,14 @@ jobs:
           
       - name: Build agent (Static Binary)
         run: |
+          echo "Debugging: Listing downloaded artifacts"
+          ls -R agent/sennet-ebpf/target
+          
           # Copy eBPF binary to expected location for embed_bpf feature
-          cp agent/sennet-ebpf/target/bpfel-unknown-none/release/sennet-ebpf agent/src/sennet-ebpf
+          cp agent/sennet-ebpf/target/bpfel-unknown-none/release/sennet-ebpf agent/src/sennet_ebpf.bin
+          
+          echo "Debugging: Verifying file placement"
+          ls -l agent/src/sennet_ebpf.bin
           
           cd agent
           cross build --release --target ${{ matrix.target }} --features embed_bpf
