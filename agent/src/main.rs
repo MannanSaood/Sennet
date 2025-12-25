@@ -10,6 +10,7 @@ mod client;
 mod interface;
 mod ebpf;
 mod upgrade;
+mod status;
 
 use anyhow::Result;
 use tracing::{info, error, warn};
@@ -46,6 +47,10 @@ async fn main() -> Result<()> {
                         info!("Already at latest version v{}", upgrade::CURRENT_VERSION);
                     }
                 }
+                return Ok(());
+            }
+            "status" => {
+                status::run()?;
                 return Ok(());
             }
             "version" | "--version" | "-v" => {

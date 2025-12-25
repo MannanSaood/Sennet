@@ -40,6 +40,9 @@ chrono = { version = "0.4", features = ["serde"] }
 # Directories for config/state paths
 dirs = "5"
 
+# CLI Output
+colored = "2"
+
 [dev-dependencies]
 tempfile = "3"
 mockito = "1"
