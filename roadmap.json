@@ -1,7 +1,23 @@
 {
     "project_metadata": {
         "name": "Sennet (Sentinel Network)",
-        "version": "1.0.1-stable",
+        "tagline": "Next-Gen Network Observability Platform",
+        "version": "2.0.0-roadmap",
+        "vision": "Unified platform combining eBPF Packet X-Ray, Cloud Egress Auditor, and Edge AI Sentinel into a single deployable agent with central control plane.",
+        "architecture": {
+            "sentinel": {
+                "language": "Rust",
+                "location": "Edge (K8s Nodes, VMs, Bare Metal)",
+                "role": "eBPF data capture + ML inference + local TUI",
+                "why": "Zero GC pauses, memory safety for kernel code, raw performance for 100k+ logs/sec"
+            },
+            "nexus": {
+                "language": "Go",
+                "location": "Central SaaS Cloud / Customer VPC",
+                "role": "API aggregator + Cloud integrations + Cost correlation",
+                "why": "Best-in-class for high-concurrency gRPC, AWS/Azure/GCP SDKs"
+            }
+        },
         "constraints": {
             "min_kernel": "5.15",
             "arch": [
@@ -11,32 +27,60 @@
             "privilege": "root (required for eBPF)"
         },
         "stack": {
-            "agent": "Rust (Aya, Tokio, RingBuf, PerCpuArray)",
-            "backend": "Go (ConnectRPC, SQLite)",
+            "agent": {
+                "core": "Rust (Tokio async runtime)",
+                "ebpf": "Aya-rs (aya 0.12, aya-ebpf)",
+                "maps": "PerCpuArray (counters), RingBuf (events)",
+                "tui": "Ratatui (crossterm backend)",
+                "ml": "ONNX Runtime (tract-onnx or ort crate)",
+                "http": "ureq (blocking), reqwest (async)"
+            },
+            "backend": {
+                "api": "Go (ConnectRPC/gRPC)",
+                "database": "SQLite (modernc.org/sqlite, CGO-free)",
+                "timeseries": "VictoriaMetrics or ClickHouse (future)",
+                "cache": "Redis (for hot data aggregation)",
+                "cloud_sdks": "aws-sdk-go-v2, azure-sdk-for-go, google-cloud-go"
+            },
             "observability": "OpenTelemetry (OTLP) -> Grafana Cloud",
-            "docs": "MkDocs (Material Theme)"
+            "docs": "MkDocs (Material Theme)",
+            "ci_cd": "GitHub Actions, cross-rs for multi-arch builds"
         },
         "paths": {
             "config": "/etc/sennet/config.yaml",
-            "state": "/var/lib/sennet/state.json"
+            "state": "/var/lib/sennet/state.json",
+            "bpf_pins": "/sys/fs/bpf/sennet/",
+            "models": "/var/lib/sennet/models/"
         }
+    },
+    "completion_status": {
+        "phase_1": "COMPLETE",
+        "phase_2": "COMPLETE",
+        "phase_3": "COMPLETE",
+        "phase_4": "COMPLETE",
+        "phase_5": "COMPLETE",
+        "phase_6": "NOT_STARTED",
+        "phase_7": "NOT_STARTED",
+        "phase_8": "NOT_STARTED",
+        "phase_9": "NOT_STARTED",
+        "phase_10": "NOT_STARTED"
     },
     "execution_plan": [
         {
             "phase_id": 1,
             "title": "Foundation & Control Plane",
+            "status": "COMPLETE",
             "objective": "Build a secure, dual-protocol control plane and a resilient agent skeleton.",
             "steps": [
                 {
                     "id": "1.1",
                     "task": "Buf & ConnectRPC Definition",
+                    "status": "COMPLETE",
                     "context": "Define the API contract. Use ConnectRPC for easy HTTP debugging.",
                     "actions": [
                         "Install 'buf'. Run `buf mod init`.",
                         "Create `proto/sentinel/v1/sentinel.proto`.",
-                        "Define `Heartbeat` RPC.",
-                        "   - Request: `{agent_id, current_version, metrics_summary}`",
-                        "   - Response: `{command: ENUM(NOOP, UPGRADE, RECONFIGURE), latest_version, config_hash}`",
+                        "Define `Heartbeat` RPC with Request/Response.",
                         "Generate Go and Rust stubs."
                     ],
                     "validation": "Output files exist in `gen/go` and `gen/rust`."
@@ -44,122 +88,526 @@
                 {
                     "id": "1.2",
                     "task": "Go Backend & Auth Middleware",
+                    "status": "COMPLETE",
                     "context": "Server must handle state and enforce API keys.",
                     "actions": [
-                        "Setup Go ConnectRPC server with `modernc.org/sqlite`.",
-                        "Implement Middleware: Intercept requests, extract `Authorization: Bearer <key>`, validate against DB.",
-                        "Implement `POST /Heartbeat` handler logic: Compare `req.current_version` vs `latest_version` to issue `UPGRADE` command.",
-                        "Create 'admin mode' flag: `sennet-server keygen --name 'Test'` prints a new API key.",
-                        "Deploy Dockerfile to Fly.io/Railway."
+                        "Setup Go ConnectRPC server with SQLite.",
+                        "Implement Auth Middleware with Bearer token validation.",
+                        "Implement `sennet-server keygen` for API key generation.",
+                        "Deploy to Render.com with Dockerfile."
                     ],
                     "validation": "Curl without key returns 401. Curl with key returns 200."
                 },
                 {
                     "id": "1.3",
                     "task": "Rust Agent Skeleton & Config",
+                    "status": "COMPLETE",
                     "context": "Agent must handle config loading and network failures.",
                     "actions": [
-                        "Define `Config` struct (serde_yaml) for `/etc/sennet/config.yaml`.",
-                        "   - Schema: `{ api_key: string, server_url: string, log_level: string, interface: Option<string> }`",
-                        "Implement `IdentityManager`: Load/Save UUID to `/var/lib/sennet`.",
-                        "Implement Main Loop: Use `backoff` crate to retry Heartbeats on failure.",
-                        "Implement Graceful Shutdown: On `SIGTERM`, log message and exit clean."
+                        "Define Config struct with serde_yaml.",
+                        "Implement IdentityManager for UUID persistence.",
+                        "Implement Heartbeat loop with backoff retry.",
+                        "Implement `sennet init` interactive setup."
                     ],
-                    "validation": "Agent starts, reads config, connects to backend, and retries if backend is killed."
+                    "validation": "Agent starts, reads config, connects to backend."
                 }
             ]
         },
         {
             "phase_id": 2,
             "title": "The eBPF Core (RingBuf & Counters)",
+            "status": "COMPLETE",
             "objective": "High-performance packet analysis on modern kernels.",
             "steps": [
                 {
                     "id": "2.1",
                     "task": "eBPF TC Classifier & Maps",
+                    "status": "COMPLETE",
                     "context": "Target Kernel 5.15+. Use RingBuf for events, Maps for counters.",
                     "actions": [
                         "Scaffold Aya project with `tc` type.",
-                        "Define `PerCpuArray` Map named `TRAFFIC_STATS` to count: `{rx_packets, rx_bytes, drop_count}`.",
-                        "Define `RingBuf` Map named `EVENTS` for TCP Flags (SYN/RST).",
-                        "Write eBPF C/Rust logic: Increment Map counters on every packet. Write to RingBuf only on interesting flags.",
-                        "Rust User-space: Async read from RingBuf (logs) and poll Maps every 10s (metrics)."
+                        "Define PerCpuArray Map named COUNTERS.",
+                        "Define RingBuf Map named EVENTS.",
+                        "Write eBPF logic for packet counting at TC ingress/egress.",
+                        "Pin maps to /sys/fs/bpf/sennet/counters."
                     ],
-                    "validation": "Dashboard shows 'Packets/sec' (from Maps) and 'Connection Refused' logs (from RingBuf) simultaneously."
+                    "validation": "Counters increment on network traffic."
                 },
                 {
                     "id": "2.2",
                     "task": "Interface Auto-Discovery",
+                    "status": "COMPLETE",
                     "context": "Don't hardcode eth0.",
                     "actions": [
-                        "Use `pnet` or `netnetlink` to find the interface with the default route.",
-                        "Attach TC program to that interface ingress and egress."
+                        "Use netlink to find interface with default route.",
+                        "Attach TC program to that interface."
                     ],
-                    "validation": "Agent works on a VM where the main interface is `ens5`."
+                    "validation": "Agent works on VMs with any interface name."
                 }
             ]
         },
         {
             "phase_id": 3,
             "title": "Distribution Pipeline",
+            "status": "COMPLETE",
             "objective": "Automated, verified releases.",
             "steps": [
                 {
                     "id": "3.1",
                     "task": "Cross-Compile & Checksum",
-                    "context": "Build for x86 and ARM. Generate SHA256.",
+                    "status": "COMPLETE",
                     "actions": [
-                        "GH Actions: Build `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`.",
-                        "Run `sha256sum * > SHA256SUMS`.",
-                        "Upload binaries + checksum file to GitHub Releases."
-                    ],
-                    "validation": "Downloadable assets exist for both architectures."
+                        "GH Actions with cross-rs for x86_64 and aarch64.",
+                        "Generate SHA256SUMS file.",
+                        "Upload to GitHub Releases."
+                    ]
                 },
                 {
                     "id": "3.2",
                     "task": "Self-Updater & Installer",
-                    "context": "Atomic upgrades with rollback safety.",
+                    "status": "COMPLETE",
                     "actions": [
-                        "Write `install.sh`: Downloads binary, checks SHA256, creates systemd service.",
-                        "Implement `sennet upgrade` in Rust:",
-                        "   1. Download new binary to `/tmp/sennet_new`.",
-                        "   2. Calculate SHA256 of downloaded file. IF mismatch -> Abort & Log Error.",
-                        "   3. Use `std::fs::rename` (atomic move) to overwrite `/usr/local/bin/sennet`. (Note: Linux allows replacing running binary).",
-                        "   4. Trigger `systemctl restart sennet`."
-                    ],
-                    "validation": "Running `sennet upgrade` successfully replaces the executable and restarts safely."
+                        "Write install.sh with SHA256 verification.",
+                        "Implement `sennet upgrade` command.",
+                        "Atomic binary replacement with systemctl restart."
+                    ]
                 }
             ]
         },
         {
             "phase_id": 4,
             "title": "Operations & Launch",
+            "status": "COMPLETE",
             "objective": "Documentation and Observability setup.",
             "steps": [
                 {
                     "id": "4.1",
                     "task": "Grafana Dashboard as Code",
-                    "context": "Don't build graphs manually. Commit them.",
+                    "status": "COMPLETE",
                     "actions": [
-                        "Create `dashboards/overview.json`.",
-                        "Define panels for: `Packets/sec` (from Map), `Drop Rate` (from Map), `Anomalies` (from RingBuf).",
-                        "Instructions to import this JSON into Grafana Cloud."
-                    ],
-                    "validation": "Importing the JSON creates a working dashboard."
+                        "Create dashboards/overview.json.",
+                        "Define panels for Packets/sec, Drop Rate."
+                    ]
                 },
                 {
                     "id": "4.2",
                     "task": "Documentation Site",
-                    "context": "Public facing docs for installation.",
+                    "status": "COMPLETE",
                     "actions": [
-                        "Initialize MkDocs with Material Theme.",
-                        "Write `docs/install.md` (The One-Liner).",
-                        "Write `docs/config_reference.md` (Documenting the YAML schema).",
-                        "Configure GH Actions to deploy to GitHub Pages."
+                        "MkDocs with Material Theme.",
+                        "Deploy to GitHub Pages."
+                    ]
+                }
+            ]
+        },
+        {
+            "phase_id": 5,
+            "title": "CLI Power Tools",
+            "status": "COMPLETE",
+            "objective": "Local observability and troubleshooting tools.",
+            "steps": [
+                {
+                    "id": "5.1",
+                    "task": "CLI Status Command",
+                    "status": "COMPLETE",
+                    "actions": [
+                        "Implement `sennet status`.",
+                        "Display uptime, backend connection, eBPF mode."
+                    ]
+                },
+                {
+                    "id": "5.2",
+                    "task": "CLI Top Command (TUI)",
+                    "status": "COMPLETE",
+                    "actions": [
+                        "Implement `sennet top` with ratatui.",
+                        "Read from pinned eBPF maps.",
+                        "Display real-time RX/TX counters."
+                    ]
+                }
+            ]
+        },
+        {
+            "phase_id": 6,
+            "title": "eBPF X-Ray: Drop Reason Tracing",
+            "status": "NOT_STARTED",
+            "priority": "HIGH",
+            "track": "OPTION_A",
+            "objective": "Trace exactly WHERE and WHY packets are being dropped in the kernel.",
+            "tools": {
+                "ebpf_hooks": [
+                    "kprobe:kfree_skb",
+                    "tracepoint:skb:kfree_skb"
+                ],
+                "kernel_api": "sk_drop_reason enum (Linux 5.17+)",
+                "maps": "RingBuf for drop events, HashMap for aggregation"
+            },
+            "steps": [
+                {
+                    "id": "6.1",
+                    "task": "kfree_skb Tracepoint Hook",
+                    "context": "Attach to kernel's packet drop point to capture drop reasons.",
+                    "actions": [
+                        "Add new eBPF program type: tracepoint/skb/kfree_skb.",
+                        "Read `reason` field from tracepoint context (enum sk_drop_reason).",
+                        "Map reason codes to human-readable strings.",
+                        "   - SKB_DROP_REASON_NETFILTER_DROP = 'Dropped by netfilter/iptables'",
+                        "   - SKB_DROP_REASON_SOCKET_FILTER = 'Dropped by socket filter'",
+                        "   - SKB_DROP_REASON_TCP_OLD_DATA = 'TCP retransmit (old data)'",
+                        "Send drop events to RingBuf with: {timestamp, ifindex, reason, src_ip, dst_ip, protocol}."
                     ],
-                    "validation": "Documentation site is live at `yourname.github.io/sennet`."
+                    "kernel_requirement": "Linux 5.17+ for sk_drop_reason enum",
+                    "validation": "Run `iptables -A INPUT -p icmp -j DROP && ping localhost` and see 'Dropped by netfilter' in events."
+                },
+                {
+                    "id": "6.2",
+                    "task": "netfilter/iptables Hook",
+                    "context": "Get the specific iptables rule or chain that dropped the packet.",
+                    "actions": [
+                        "Hook nf_hook_slow or nf_log_trace if available.",
+                        "Capture: chain name (INPUT/OUTPUT/FORWARD), table (filter/nat/mangle), rule index.",
+                        "Correlate with `iptables -L -v --line-numbers` output."
+                    ],
+                    "validation": "Output: 'Packet dropped at chain INPUT, rule #3 (filter table)'."
+                },
+                {
+                    "id": "6.3",
+                    "task": "TUI Drop Events Panel",
+                    "context": "Display drop events in sennet top.",
+                    "actions": [
+                        "Add third panel to TUI: 'Recent Drops'.",
+                        "Show: timestamp, reason, src->dst, interface.",
+                        "Color-code by severity (red=security, yellow=config, gray=normal)."
+                    ],
+                    "validation": "`sennet top` shows real-time drop events with reasons."
+                },
+                {
+                    "id": "6.4",
+                    "task": "CLI Trace Command",
+                    "context": "One-shot packet tracing for debugging.",
+                    "actions": [
+                        "Implement `sennet trace <filter>` command.",
+                        "Filter by: IP, port, protocol.",
+                        "Show packet journey: interface -> TC_INGRESS -> netfilter -> socket/drop.",
+                        "Use temporary eBPF attachment (doesn't require service running)."
+                    ],
+                    "validation": "`sennet trace --dst 10.0.0.5:443` shows packet path."
+                }
+            ]
+        },
+        {
+            "phase_id": 7,
+            "title": "Kubernetes Context & NetworkPolicy Correlation",
+            "status": "NOT_STARTED",
+            "priority": "HIGH",
+            "track": "OPTION_A",
+            "objective": "Enrich packet data with Kubernetes context: pod names, namespaces, NetworkPolicies.",
+            "tools": {
+                "k8s_api": "client-go or kube-rs",
+                "cni_integration": "Read from /var/run/netns/, Calico/Cilium APIs",
+                "ebpf_maps": "HashMap<container_id, pod_info>"
+            },
+            "steps": [
+                {
+                    "id": "7.1",
+                    "task": "Container ID to Pod Mapping",
+                    "context": "Map network namespace / cgroup ID to Kubernetes pod.",
+                    "actions": [
+                        "Read cgroup_id from eBPF context (bpf_get_current_cgroup_id).",
+                        "In userspace: Parse /proc/<pid>/cgroup to find container ID.",
+                        "Query Kubernetes API: container_id -> pod name, namespace, labels.",
+                        "Cache mapping in HashMap (refresh every 30s or on pod events)."
+                    ],
+                    "validation": "Traffic shows 'frontend-pod (namespace: production)' instead of raw IP."
+                },
+                {
+                    "id": "7.2",
+                    "task": "NetworkPolicy Fetcher",
+                    "context": "Load all NetworkPolicies and their selectors.",
+                    "actions": [
+                        "Use kube-rs to watch NetworkPolicy resources.",
+                        "Parse spec.podSelector, ingress/egress rules.",
+                        "Build in-memory index: {namespace, labels} -> [policies].",
+                        "Check if dropped packet matches any DENY policy."
+                    ],
+                    "validation": "Output: 'Dropped by NetworkPolicy deny-frontend-db in namespace production'."
+                },
+                {
+                    "id": "7.3",
+                    "task": "CNI-Specific Integration (Calico/Cilium)",
+                    "context": "Deep integration with popular CNIs for richer context.",
+                    "actions": [
+                        "Detect CNI type from /etc/cni/net.d/.",
+                        "Calico: Query calicoctl or Calico API for policy names.",
+                        "Cilium: Query Cilium API or read Hubble events (if available).",
+                        "Fallback: Generic iptables chain name if CNI unknown."
+                    ],
+                    "validation": "Works with stock Kubernetes, Calico, and Cilium."
+                },
+                {
+                    "id": "7.4",
+                    "task": "sennet diagnose Command",
+                    "context": "One-command K8s connectivity diagnosis.",
+                    "actions": [
+                        "Implement `sennet diagnose <pod-a> <pod-b>`.",
+                        "Check: DNS resolution, NetworkPolicies, Service endpoints, iptables rules.",
+                        "Output structured report with recommendations.",
+                        "   Example: 'Pod frontend cannot reach backend: NetworkPolicy default-deny blocks egress on port 5432.'"
+                    ],
+                    "validation": "Engineer runs command, gets actionable fix in <5 seconds."
+                }
+            ]
+        },
+        {
+            "phase_id": 8,
+            "title": "Process Attribution & Flow Tracking",
+            "status": "NOT_STARTED",
+            "priority": "MEDIUM",
+            "track": "OPTION_A",
+            "objective": "Show which process/PID is generating each network flow.",
+            "tools": {
+                "ebpf_hooks": [
+                    "kprobe:tcp_connect",
+                    "kprobe:inet_csk_accept",
+                    "socket:sock_ops"
+                ],
+                "maps": "HashMap<5-tuple, pid_info>"
+            },
+            "steps": [
+                {
+                    "id": "8.1",
+                    "task": "Socket-to-PID Mapping",
+                    "context": "Track which process owns each socket.",
+                    "actions": [
+                        "Hook tcp_connect (outbound) and inet_csk_accept (inbound).",
+                        "Call bpf_get_current_pid_tgid() to get PID.",
+                        "Store in HashMap: {src_ip, src_port, dst_ip, dst_port, proto} -> {pid, comm}.",
+                        "Clean up on socket close (hook tcp_close)."
+                    ],
+                    "validation": "`sennet top` shows PID and process name for each flow."
+                },
+                {
+                    "id": "8.2",
+                    "task": "Per-Flow Bandwidth Tracking",
+                    "context": "Track bytes/packets per connection, not just per-interface.",
+                    "actions": [
+                        "Create LRU HashMap for flows (limit: 100k entries).",
+                        "Update counters on each packet in TC hook.",
+                        "Expose top-N flows by bandwidth in TUI."
+                    ],
+                    "validation": "See 'ssh (pid 1234): 5 MB/s' in real-time."
+                },
+                {
+                    "id": "8.3",
+                    "task": "TUI Flows Panel",
+                    "context": "Live table of network flows with PID attribution.",
+                    "actions": [
+                        "Add flows panel to `sennet top`.",
+                        "Columns: PID, Command, Local, Remote, Proto, RX/TX, State.",
+                        "Sortable by column (bandwidth, PID, etc.).",
+                        "Filter by process name or port."
+                    ],
+                    "validation": "`sennet top` looks like `htop` but for network."
+                }
+            ]
+        },
+        {
+            "phase_id": 9,
+            "title": "Cross-Cloud Egress Auditor (Go Backend)",
+            "status": "NOT_STARTED",
+            "priority": "MEDIUM",
+            "track": "OPTION_B",
+            "objective": "Correlate network traffic with cloud costs and detect shadow egress.",
+            "tools": {
+                "aws": "aws-sdk-go-v2 (Cost Explorer, VPC Flow Logs)",
+                "azure": "azure-sdk-for-go (Cost Management, NSG Flow Logs)",
+                "gcp": "google-cloud-go (Billing API, VPC Flow Logs)",
+                "storage": "ClickHouse for flow aggregation"
+            },
+            "steps": [
+                {
+                    "id": "9.1",
+                    "task": "Cloud Credential Management",
+                    "context": "Securely store and use cloud credentials.",
+                    "actions": [
+                        "Add cloud credentials to config: `clouds: [{provider: aws, role_arn: ...}]`.",
+                        "Support: AWS AssumeRole, Azure Service Principal, GCP Service Account.",
+                        "Validate credentials on startup, log errors clearly."
+                    ]
+                },
+                {
+                    "id": "9.2",
+                    "task": "AWS Cost Explorer Integration",
+                    "context": "Fetch egress costs per service/region.",
+                    "actions": [
+                        "Call GetCostAndUsage API with filter: USAGE_TYPE contains 'DataTransfer-Out'.",
+                        "Group by: LinkedAccount, Service, Region.",
+                        "Store daily aggregates in SQLite/ClickHouse."
+                    ],
+                    "validation": "Dashboard shows 'EC2 Egress: $450/month from us-east-1'."
+                },
+                {
+                    "id": "9.3",
+                    "task": "VPC Flow Logs Ingestion",
+                    "context": "Correlate flow logs with agent data.",
+                    "actions": [
+                        "Poll S3 bucket for VPC Flow Logs (AWS) or Blob Storage (Azure).",
+                        "Parse Parquet/JSON format, extract: src_ip, dst_ip, bytes, action.",
+                        "Match flows to Sentinel agent data by IP/timestamp.",
+                        "Detect 'shadow egress': traffic leaving VPC without agent visibility."
+                    ],
+                    "validation": "Alert: 'Unaccounted egress: 10GB to 52.94.x.x (AWS S3 region) - no agent coverage'."
+                },
+                {
+                    "id": "9.4",
+                    "task": "Cost Correlation Engine",
+                    "context": "Map specific services/pods to egress costs.",
+                    "actions": [
+                        "Input: Agent flow data (pod -> bytes), Cloud billing (region -> cost).",
+                        "Algorithm: Proportional attribution based on bytes transferred.",
+                        "Output: 'Pod image-resizer is responsible for ~$200/month egress to Azure'."
+                    ],
+                    "validation": "Cost breakdown by service appears in dashboard."
+                },
+                {
+                    "id": "9.5",
+                    "task": "Egress Optimization Recommendations",
+                    "context": "AI-generated suggestions to reduce costs.",
+                    "actions": [
+                        "Rule engine for common patterns:",
+                        "   - Cross-AZ traffic: 'Move replica to same AZ, save $X/month'.",
+                        "   - Cross-region S3: 'Use S3 Transfer Acceleration or regional bucket'.",
+                        "   - NAT Gateway abuse: 'Use VPC endpoints for AWS services'.",
+                        "Display in dashboard with estimated savings."
+                    ],
+                    "validation": "Actionable recommendations with $ impact."
+                }
+            ]
+        },
+        {
+            "phase_id": 10,
+            "title": "Edge AI Sentinel (Local ML Inference)",
+            "status": "NOT_STARTED",
+            "priority": "LOW",
+            "track": "OPTION_B",
+            "objective": "Privacy-first anomaly detection running entirely on-device.",
+            "tools": {
+                "ml_runtime": "ONNX (tract-onnx or ort crate)",
+                "models": "Small transformer for time-series anomaly detection",
+                "training": "PyTorch (offline), export to ONNX"
+            },
+            "steps": [
+                {
+                    "id": "10.1",
+                    "task": "ONNX Runtime Integration",
+                    "context": "Embed ML inference in Rust agent.",
+                    "actions": [
+                        "Add tract-onnx or ort crate dependency.",
+                        "Load model from /var/lib/sennet/models/anomaly.onnx.",
+                        "Create inference thread separate from eBPF polling.",
+                        "Input: Rolling window of last N flow summaries.",
+                        "Output: Anomaly score (0.0 - 1.0)."
+                    ],
+                    "validation": "Model inference runs without blocking main loop."
+                },
+                {
+                    "id": "10.2",
+                    "task": "Baseline Learning Mode",
+                    "context": "Learn normal traffic patterns before alerting.",
+                    "actions": [
+                        "First 24 hours: Collect traffic patterns, no alerts.",
+                        "Compute statistical baselines: mean/stddev for flows/sec, bytes/sec.",
+                        "Save baseline to /var/lib/sennet/baseline.json.",
+                        "After baseline: Switch to detection mode."
+                    ],
+                    "validation": "Agent learns traffic patterns without false positives."
+                },
+                {
+                    "id": "10.3",
+                    "task": "Anomaly Event Generation",
+                    "context": "Generate alerts for unusual patterns.",
+                    "actions": [
+                        "Detect: Sudden traffic spikes, new destination IPs, unusual protocols.",
+                        "Rate-limit alerts (max 1 per minute per type).",
+                        "Send to: Local syslog, Backend (via Heartbeat), TUI events panel."
+                    ],
+                    "validation": "Simulate port scan, see 'Anomaly: 50 new connections to port 22 in 1 second'."
+                },
+                {
+                    "id": "10.4",
+                    "task": "Model Update Mechanism",
+                    "context": "Push new models from backend without binary update.",
+                    "actions": [
+                        "Backend serves models at /models/anomaly.onnx (versioned).",
+                        "Agent checks model hash in Heartbeat response.",
+                        "If new model: Download, verify signature, hot-reload.",
+                        "Rollback if new model causes excessive false positives."
+                    ],
+                    "validation": "Push new model, agent uses it within 1 heartbeat cycle."
                 }
             ]
         }
+    ],
+    "cli_commands": {
+        "existing": [
+            {
+                "command": "sennet",
+                "description": "Run agent in foreground (for testing)"
+            },
+            {
+                "command": "sennet status",
+                "description": "Show agent health and connection status"
+            },
+            {
+                "command": "sennet top",
+                "description": "Real-time TUI with traffic stats"
+            },
+            {
+                "command": "sennet init",
+                "description": "Interactive configuration wizard"
+            },
+            {
+                "command": "sennet upgrade",
+                "description": "Self-update to latest version"
+            },
+            {
+                "command": "sennet help",
+                "description": "Show all commands"
+            }
+        ],
+        "planned": [
+            {
+                "command": "sennet trace <filter>",
+                "description": "One-shot packet tracing (Phase 6)",
+                "phase": 6
+            },
+            {
+                "command": "sennet diagnose <pod-a> <pod-b>",
+                "description": "K8s connectivity diagnosis (Phase 7)",
+                "phase": 7
+            },
+            {
+                "command": "sennet flows",
+                "description": "List active network flows with PIDs (Phase 8)",
+                "phase": 8
+            },
+            {
+                "command": "sennet cost",
+                "description": "Show egress cost attribution (Phase 9)",
+                "phase": 9
+            },
+            {
+                "command": "sennet baseline",
+                "description": "Start/reset baseline learning (Phase 10)",
+                "phase": 10
+            }
+        ]
+    },
+    "priority_order": [
+        "Phase 6: Drop Reason Tracing (HIGH - differentiator)",
+        "Phase 7: K8s NetworkPolicy Correlation (HIGH - enterprise value)",
+        "Phase 8: Process Attribution (MEDIUM - nice-to-have)",
+        "Phase 9: Cloud Egress Auditor (MEDIUM - SaaS revenue)",
+        "Phase 10: Edge AI Sentinel (LOW - advanced feature)"
     ]
 }
