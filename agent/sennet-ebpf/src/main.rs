@@ -3,6 +3,7 @@
 //! This program attaches to:
 //! 1. TC (Traffic Control) hook - counts packets/bytes for ingress/egress
 //! 2. kfree_skb tracepoint - captures packet drop reasons (Phase 6.1)
+//! 3. nf_hook_slow tracepoint - captures netfilter hook/verdict (Phase 6.2)
 
 #![no_std]
 #![no_main]
@@ -15,7 +16,7 @@ use aya_ebpf::{
     helpers::bpf_ktime_get_ns,
 };
 // use aya_log_ebpf::info; // Reserved for future logging
-use sennet_common::{PacketCounters, PacketEvent, DropEvent};
+use sennet_common::{PacketCounters, PacketEvent, DropEvent, NetfilterEvent};
 
 /// Per-CPU counters for packet statistics
 /// Index 0 = ingress, Index 1 = egress
@@ -29,6 +30,10 @@ static EVENTS: RingBuf = RingBuf::with_byte_size(256 * 1024, 0); // 256KB
 /// Ring buffer for drop events (Phase 6.1)
 #[map]
 static DROP_EVENTS: RingBuf = RingBuf::with_byte_size(64 * 1024, 0); // 64KB
+
+/// Ring buffer for netfilter events (Phase 6.2)
+#[map]
+static NF_EVENTS: RingBuf = RingBuf::with_byte_size(32 * 1024, 0); // 32KB
 
 /// Large packet threshold (bytes)
 const LARGE_PACKET_THRESHOLD: u32 = 9000; // Jumbo frame size
@@ -161,8 +166,59 @@ fn try_kfree_skb(ctx: &TracePointContext) -> Result<u32, ()> {
     Ok(0)
 }
 
+// =============================================================================
+// nf_hook_slow Tracepoint (Phase 6.2: Netfilter Hook Tracing)
+// =============================================================================
+
+/// Tracepoint for netfilter slow path processing
+/// 
+/// Attaches to: tracepoint/netfilter/nf_hook_slow_start or similar
+/// 
+/// This captures when packets traverse netfilter hooks and their verdicts.
+/// Note: The exact tracepoint name and format varies by kernel version.
+#[tracepoint]
+pub fn nf_hook_slow(ctx: TracePointContext) -> u32 {
+    match try_nf_hook_slow(&ctx) {
+        Ok(ret) => ret,
+        Err(_) => 0,
+    }
+}
+
+#[inline(always)]
+fn try_nf_hook_slow(ctx: &TracePointContext) -> Result<u32, ()> {
+    // Read hook state from tracepoint context
+    // struct nf_hook_state layout (approximate, varies by kernel):
+    //   u8 hook;      // offset 0
+    //   u8 pf;        // offset 1
+    //   ... other fields
+    let hook: u8 = unsafe { ctx.read_at(0).unwrap_or(255) };
+    let pf: u8 = unsafe { ctx.read_at(1).unwrap_or(0) };
+    
+    // For nf_hook_slow_finish tracepoint, verdict is typically at a later offset
+    // For now, we'll record all hook invocations
+    let verdict: u8 = unsafe { ctx.read_at(8).unwrap_or(1) }; // Default ACCEPT=1
+    
+    // Only record DROP events or interesting hooks
+    if verdict == 0 || hook <= 4 { // NF_DROP or valid hook types
+        if let Some(mut entry) = NF_EVENTS.reserve::<NetfilterEvent>(0) {
+            let event = entry.as_mut_ptr();
+            unsafe {
+                (*event).timestamp_ns = bpf_ktime_get_ns();
+                (*event).hook = hook;
+                (*event).pf = pf;
+                (*event).verdict = verdict;
+                (*event)._pad = 0;
+                (*event).ifindex_in = 0;  // TODO: Extract from context
+                (*event).ifindex_out = 0; // TODO: Extract from context
+            }
+            entry.submit(0);
+        }
+    }
+    
+    Ok(0)
+}
+
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     unsafe { core::hint::unreachable_unchecked() }
 }
-

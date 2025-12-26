@@ -38,6 +38,23 @@ pub struct DropEvent {
 #[cfg(target_os = "linux")]
 unsafe impl aya::Pod for DropEvent {}
 
+/// Netfilter event structure (mirrors eBPF side)
+/// Used for nf_hook_slow tracepoint events (Phase 6.2)
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug)]
+pub struct NetfilterEvent {
+    pub timestamp_ns: u64,
+    pub hook: u8,
+    pub pf: u8,
+    pub verdict: u8,
+    pub _pad: u8,
+    pub ifindex_in: u32,
+    pub ifindex_out: u32,
+}
+
+#[cfg(target_os = "linux")]
+unsafe impl aya::Pod for NetfilterEvent {}
+
 #[cfg(target_os = "linux")]
 use {
     aya::{
@@ -56,6 +73,8 @@ pub struct EbpfManager {
     bpf: Bpf,
     /// Whether drop tracing is active (kfree_skb tracepoint attached)
     pub drop_tracing_enabled: bool,
+    /// Whether netfilter tracing is active (nf_hook_slow tracepoint attached)
+    pub nf_tracing_enabled: bool,
 }
 
 impl EbpfManager {
@@ -126,10 +145,38 @@ impl EbpfManager {
             tracing::debug!("kfree_skb program not found in eBPF binary");
         }
 
+        // Try to attach nf_hook_slow tracepoint (Phase 6.2)
+        let mut nf_tracing_enabled = false;
+        if let Some(prog) = bpf.program_mut("nf_hook_slow") {
+            match prog.try_into() as Result<&mut TracePoint, _> {
+                Ok(tp) => {
+                    if let Err(e) = tp.load() {
+                        tracing::warn!("Failed to load nf_hook_slow tracepoint: {}", e);
+                    } else if let Err(e) = tp.attach("netfilter", "nf_hook_slow") {
+                        tracing::warn!("Failed to attach nf_hook_slow tracepoint: {}", e);
+                    } else {
+                        tracing::info!("Attached nf_hook_slow tracepoint for netfilter tracing");
+                        nf_tracing_enabled = true;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("nf_hook_slow program not a tracepoint: {}", e);
+                }
+            }
+        } else {
+            tracing::debug!("nf_hook_slow program not found in eBPF binary");
+        }
+
+        // Pin NF_EVENTS map if available
+        if let Some(map) = bpf.map_mut("NF_EVENTS") {
+            let _ = map.pin(pin_path.join("nf_events"));
+        }
+
         Ok(Self {
             interface: interface.to_string(),
             bpf,
             drop_tracing_enabled,
+            nf_tracing_enabled,
         })
     }
 
@@ -175,6 +222,7 @@ impl EbpfManager {
         Ok(Self {
             interface: interface.to_string(),
             drop_tracing_enabled: false,
+            nf_tracing_enabled: false,
         })
     }
 

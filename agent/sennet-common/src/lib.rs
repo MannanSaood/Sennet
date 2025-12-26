@@ -154,3 +154,80 @@ pub fn drop_reason_str(reason: u32) -> &'static str {
         _ => "UNKNOWN",
     }
 }
+
+// ============================================================================
+// Netfilter Event Types (Phase 6.2: netfilter/iptables Hook)
+// ============================================================================
+
+/// Netfilter hook types (NF_INET_*)
+pub mod nf_hook {
+    /// Before routing decision (PREROUTING)
+    pub const PRE_ROUTING: u8 = 0;
+    /// Incoming to local host (INPUT)
+    pub const LOCAL_IN: u8 = 1;
+    /// Being forwarded (FORWARD)
+    pub const FORWARD: u8 = 2;
+    /// Outgoing from local host (OUTPUT)
+    pub const LOCAL_OUT: u8 = 3;
+    /// After routing decision (POSTROUTING)
+    pub const POST_ROUTING: u8 = 4;
+}
+
+/// Netfilter verdicts
+pub mod nf_verdict {
+    pub const DROP: u32 = 0;
+    pub const ACCEPT: u32 = 1;
+    pub const STOLEN: u32 = 2;
+    pub const QUEUE: u32 = 3;
+    pub const REPEAT: u32 = 4;
+    pub const STOP: u32 = 5;
+}
+
+/// Event for netfilter hook processing (Phase 6.2)
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct NetfilterEvent {
+    /// Kernel timestamp in nanoseconds
+    pub timestamp_ns: u64,
+    /// Hook type (NF_INET_LOCAL_IN, etc.)
+    pub hook: u8,
+    /// Protocol family (2=AF_INET/IPv4, 10=AF_INET6/IPv6)
+    pub pf: u8,
+    /// Verdict (NF_DROP=0, NF_ACCEPT=1, etc.)
+    pub verdict: u8,
+    /// Padding for alignment
+    pub _pad: u8,
+    /// Input interface index
+    pub ifindex_in: u32,
+    /// Output interface index
+    pub ifindex_out: u32,
+}
+
+/// Human-readable hook name
+#[cfg(not(feature = "no-std"))]
+pub fn nf_hook_str(hook: u8) -> &'static str {
+    use nf_hook::*;
+    match hook {
+        PRE_ROUTING => "PREROUTING",
+        LOCAL_IN => "INPUT",
+        FORWARD => "FORWARD",
+        LOCAL_OUT => "OUTPUT",
+        POST_ROUTING => "POSTROUTING",
+        _ => "UNKNOWN",
+    }
+}
+
+/// Human-readable verdict name
+#[cfg(not(feature = "no-std"))]
+pub fn nf_verdict_str(verdict: u8) -> &'static str {
+    match verdict {
+        0 => "DROP",
+        1 => "ACCEPT",
+        2 => "STOLEN",
+        3 => "QUEUE",
+        4 => "REPEAT",
+        5 => "STOP",
+        _ => "UNKNOWN",
+    }
+}
+
