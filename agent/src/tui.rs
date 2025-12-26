@@ -45,7 +45,6 @@ struct RealDataProvider {
 #[cfg(target_os = "linux")]
 impl RealDataProvider {
     fn new() -> Result<Self> {
-        use aya::maps::Map;
         use std::path::Path;
         
         let pin_path = Path::new("/sys/fs/bpf/sennet/counters");
@@ -53,8 +52,9 @@ impl RealDataProvider {
             anyhow::bail!("Pinned map not found at {:?}. Is the agent running?", pin_path);
         }
         
-        let map = Map::from_pin(pin_path)?;
-        let counters: PerCpuArray<_, PacketCounters> = map.try_into()?;
+        // Use MapData::from_pin (not Map::from_pin) in aya 0.12
+        let map_data = MapData::from_pin(pin_path)?;
+        let counters: PerCpuArray<_, PacketCounters> = PerCpuArray::try_from(map_data)?;
         
         Ok(Self { 
             counters,
