@@ -96,29 +96,18 @@ jobs:
           
       - name: Build agent (Static Binary)
         run: |
-          echo "Debugging: Full Workspace Listing"
-          ls -R
+          set -x # Print commands for debugging
           
-          echo "Debugging: Listing downloaded artifacts"
-          ls -R agent/sennet-ebpf/target
+          echo "Debugging: Finding all files in workspace"
+          find . -maxdepth 4 -not -path '*/.*'
           
-          # Copy eBPF binary to expected location for embed_bpf feature
-          echo "Debugging: Verifying file placement"
-          ls -l agent/src/sennet_ebpf.bin
-          
-          
-          
-          # Copy eBPF binary to multiple potential locations to catch it wherever cross mounts
-          cp agent/sennet-ebpf/target/bpfel-unknown-none/release/sennet-ebpf agent/src/sennet_ebpf.bin
-          cp agent/sennet-ebpf/target/bpfel-unknown-none/release/sennet-ebpf agent/sennet_ebpf.bin
-          
-          echo "Debugging: Verifying file placement in agent dir"
-          ls -R agent/
+          # Copy eBPF binary to multiple potential locations (ignoring errors with || true to continue debug)
+          echo "Copying eBPF binary..."
+          cp agent/sennet-ebpf/target/bpfel-unknown-none/release/sennet-ebpf agent/src/sennet_ebpf.bin || echo "Failed copy to src/"
+          cp agent/sennet-ebpf/target/bpfel-unknown-none/release/sennet-ebpf agent/sennet_ebpf.bin || echo "Failed copy to root/"
           
           cd agent
           
-          # We export this, but build.rs also checks default paths now.
-          # We point to the one in the root of the crate, which is usually mapped.
           export SENNET_EBPF_BINARY="sennet_ebpf.bin" 
           
           cross build --release --target ${{ matrix.target }} --features embed_bpf
