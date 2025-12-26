@@ -13,6 +13,7 @@ mod upgrade;
 mod status;
 mod tui;
 mod init;
+mod trace;
 
 use anyhow::Result;
 use tracing::{info, error, warn};
@@ -78,6 +79,16 @@ async fn main() -> Result<()> {
             }
             "top" => {
                 tui::run()?;
+                return Ok(());
+            }
+            "trace" => {
+                // Pass remaining args to trace command
+                let trace_args: Vec<String> = args[2..].to_vec();
+                if trace_args.iter().any(|a| a == "--help" || a == "-h") {
+                    trace::print_help();
+                } else {
+                    trace::run(&trace_args)?;
+                }
                 return Ok(());
             }
             cmd => {
@@ -172,6 +183,7 @@ fn print_help() {
     println!("    {}        Initialize configuration interactively", "init".cyan());
     println!("    {}      Display agent status and connection info", "status".cyan());
     println!("    {}         Live traffic monitoring dashboard", "top".cyan());
+    println!("    {}       One-shot packet tracing", "trace".cyan());
     println!("    {}     Check for and install updates", "upgrade".cyan());
     println!("    {}     Print version information", "version".cyan());
     println!("    {}        Show this help message", "help".cyan());
@@ -181,6 +193,7 @@ fn print_help() {
     println!("    sudo sennet              # Run as daemon");
     println!("    sennet status            # Check agent status");
     println!("    sennet top               # Monitor traffic live");
+    println!("    sennet trace --dst 10.0.0.5  # Trace drops to IP");
     println!();
     println!("{}", "CONFIGURATION:".yellow());
     println!("    Config file: /etc/sennet/config.yaml");
