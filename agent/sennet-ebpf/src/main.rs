@@ -1,19 +1,21 @@
-//! Sennet eBPF TC Classifier
+//! Sennet eBPF TC Classifier & Drop Tracer
 //!
-//! This program attaches to the TC (Traffic Control) hook and counts
-//! packets/bytes for both ingress and egress traffic.
+//! This program attaches to:
+//! 1. TC (Traffic Control) hook - counts packets/bytes for ingress/egress
+//! 2. kfree_skb tracepoint - captures packet drop reasons (Phase 6.1)
 
 #![no_std]
 #![no_main]
 
 use aya_ebpf::{
     bindings::TC_ACT_PIPE,
-    macros::{classifier, map},
+    macros::{classifier, map, tracepoint},
     maps::{PerCpuArray, RingBuf},
-    programs::TcContext,
+    programs::{TcContext, TracePointContext},
+    helpers::bpf_ktime_get_ns,
 };
 // use aya_log_ebpf::info; // Reserved for future logging
-use sennet_common::{PacketCounters, PacketEvent};
+use sennet_common::{PacketCounters, PacketEvent, DropEvent};
 
 /// Per-CPU counters for packet statistics
 /// Index 0 = ingress, Index 1 = egress
@@ -24,8 +26,16 @@ static COUNTERS: PerCpuArray<PacketCounters> = PerCpuArray::with_max_entries(2, 
 #[map]
 static EVENTS: RingBuf = RingBuf::with_byte_size(256 * 1024, 0); // 256KB
 
+/// Ring buffer for drop events (Phase 6.1)
+#[map]
+static DROP_EVENTS: RingBuf = RingBuf::with_byte_size(64 * 1024, 0); // 64KB
+
 /// Large packet threshold (bytes)
 const LARGE_PACKET_THRESHOLD: u32 = 9000; // Jumbo frame size
+
+// =============================================================================
+// TC Classifiers (Traffic Counting)
+// =============================================================================
 
 /// TC classifier for ingress traffic
 #[classifier]
@@ -101,7 +111,58 @@ fn emit_large_packet_event(_ctx: &TcContext, size: u32) -> Result<(), ()> {
     Ok(())
 }
 
+// =============================================================================
+// kfree_skb Tracepoint (Phase 6.1: Drop Reason Tracing)
+// =============================================================================
+
+/// Tracepoint for kernel packet drops
+/// 
+/// Attaches to: tracepoint/skb/kfree_skb
+/// 
+/// Context format (Linux 5.17+):
+///   struct {
+///       void *skbaddr;           // offset 0
+///       void *location;          // offset 8
+///       unsigned short protocol; // offset 16
+///       enum skb_drop_reason reason; // offset 20 (Linux 5.17+)
+///   }
+#[tracepoint]
+pub fn kfree_skb(ctx: TracePointContext) -> u32 {
+    match try_kfree_skb(&ctx) {
+        Ok(ret) => ret,
+        Err(_) => 0,
+    }
+}
+
+#[inline(always)]
+fn try_kfree_skb(ctx: &TracePointContext) -> Result<u32, ()> {
+    // Read drop reason from tracepoint context
+    // Note: Offset 20 is for Linux 5.17+ where sk_drop_reason is available
+    // On older kernels, this field doesn't exist and we'll get garbage/0
+    let reason: u32 = unsafe { ctx.read_at(20).unwrap_or(0) };
+    
+    // Only emit events for interesting drop reasons (not NOT_SPECIFIED=1)
+    // Reason 0 means we couldn't read it (older kernel)
+    if reason > 1 {
+        if let Some(mut entry) = DROP_EVENTS.reserve::<DropEvent>(0) {
+            let event = entry.as_mut_ptr();
+            unsafe {
+                (*event).timestamp_ns = bpf_ktime_get_ns();
+                (*event).reason = reason;
+                // Protocol is at offset 16 (unsigned short)
+                (*event).protocol = ctx.read_at(16).unwrap_or(0);
+                (*event).ifindex = 0; // TODO: Extract from skb if needed
+                (*event)._pad = 0;
+            }
+            entry.submit(0);
+        }
+    }
+    
+    Ok(0)
+}
+
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     unsafe { core::hint::unreachable_unchecked() }
 }
+

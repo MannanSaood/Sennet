@@ -1,6 +1,7 @@
 //! eBPF Loader and Manager
 //!
-//! Loads and manages the TC eBPF programs, reads counters and events.
+//! Loads and manages the TC eBPF programs and kfree_skb tracepoint.
+//! Reads counters and drop events.
 //! On non-Linux platforms, provides a mock implementation.
 
 use anyhow::Result;
@@ -22,10 +23,25 @@ pub struct PacketCounters {
 #[cfg(target_os = "linux")]
 unsafe impl aya::Pod for PacketCounters {}
 
+/// Drop event structure (mirrors eBPF side)
+/// Used for kfree_skb tracepoint events
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug)]
+pub struct DropEvent {
+    pub timestamp_ns: u64,
+    pub reason: u32,
+    pub ifindex: u32,
+    pub protocol: u16,
+    pub _pad: u16,
+}
+
+#[cfg(target_os = "linux")]
+unsafe impl aya::Pod for DropEvent {}
+
 #[cfg(target_os = "linux")]
 use {
     aya::{
-        programs::{tc, SchedClassifier, TcAttachType},
+        programs::{tc, SchedClassifier, TcAttachType, TracePoint},
         maps::PerCpuArray,
         Bpf,
     },
@@ -38,6 +54,8 @@ pub struct EbpfManager {
     #[cfg(target_os = "linux")]
     #[allow(dead_code)]
     bpf: Bpf,
+    /// Whether drop tracing is active (kfree_skb tracepoint attached)
+    pub drop_tracing_enabled: bool,
 }
 
 impl EbpfManager {
@@ -60,17 +78,19 @@ impl EbpfManager {
             std::fs::create_dir_all(pin_path)?;
         }
 
-        // Pin COUNTERS map using the Map trait's pin method
+        // Pin COUNTERS map
         tracing::info!("Pinning maps to /sys/fs/bpf/sennet...");
         if let Some(map) = bpf.map_mut("COUNTERS") {
             let _ = map.pin(pin_path.join("counters")); // Ignore if already pinned
         }
         
-        // Note: RingBuf in aya 0.12 doesn't support pinning via this API
-        // We skip pinning EVENTS for now - the map is still usable
+        // Pin DROP_EVENTS map (Phase 6.1)
+        if let Some(map) = bpf.map_mut("DROP_EVENTS") {
+            let _ = map.pin(pin_path.join("drop_events")); // Ignore if already pinned
+        }
 
         // Attach TC Programs
-        tracing::info!("Attaching eBPF to interface {}", interface);
+        tracing::info!("Attaching TC classifiers to interface {}", interface);
         
         // Add clsact qdisc to the interface (ignore error if it already exists)
         let _ = tc::qdisc_add_clsact(interface);
@@ -83,9 +103,33 @@ impl EbpfManager {
         egress.load()?;
         egress.attach(interface, TcAttachType::Egress)?;
 
+        // Try to attach kfree_skb tracepoint (Phase 6.1)
+        // This may fail on older kernels or if tracepoint doesn't exist
+        let mut drop_tracing_enabled = false;
+        if let Some(prog) = bpf.program_mut("kfree_skb") {
+            match prog.try_into() as Result<&mut TracePoint, _> {
+                Ok(tp) => {
+                    if let Err(e) = tp.load() {
+                        tracing::warn!("Failed to load kfree_skb tracepoint: {}", e);
+                    } else if let Err(e) = tp.attach("skb", "kfree_skb") {
+                        tracing::warn!("Failed to attach kfree_skb tracepoint: {}", e);
+                    } else {
+                        tracing::info!("Attached kfree_skb tracepoint for drop reason tracing");
+                        drop_tracing_enabled = true;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("kfree_skb program not a tracepoint: {}", e);
+                }
+            }
+        } else {
+            tracing::debug!("kfree_skb program not found in eBPF binary");
+        }
+
         Ok(Self {
             interface: interface.to_string(),
             bpf,
+            drop_tracing_enabled,
         })
     }
 
@@ -130,6 +174,7 @@ impl EbpfManager {
         tracing::warn!("eBPF not supported on this platform, using mock");
         Ok(Self {
             interface: interface.to_string(),
+            drop_tracing_enabled: false,
         })
     }
 
