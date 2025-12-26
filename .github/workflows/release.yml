@@ -100,30 +100,23 @@ jobs:
           ls -R agent/sennet-ebpf/target
           
           # Copy eBPF binary to expected location for embed_bpf feature
-          cp agent/sennet-ebpf/target/bpfel-unknown-none/release/sennet-ebpf agent/src/sennet_ebpf.bin
-          
           echo "Debugging: Verifying file placement"
           ls -l agent/src/sennet_ebpf.bin
           
           
+          
+          # Copy eBPF binary to multiple potential locations to catch it wherever cross mounts
+          cp agent/sennet-ebpf/target/bpfel-unknown-none/release/sennet-ebpf agent/src/sennet_ebpf.bin
+          cp agent/sennet-ebpf/target/bpfel-unknown-none/release/sennet-ebpf agent/sennet_ebpf.bin
+          
+          echo "Debugging: Verifying file placement in agent dir"
+          ls -R agent/
+          
           cd agent
-          # Pass env var to cross via CROSS_ENV_SENNET_EBPF_BINARY (if cross supports it) -> No, cross passes all vars?
-          # Cross creates a container. We need to mount the file? 
-          # Actually, if the file is in `agent/src/sennet_ebpf.bin` (host), and we mount $(pwd) which is agent/, then the path relative to Cargo.toml is `src/sennet_ebpf.bin`.
           
-          # Strategy: Use local file in src folder, build.rs finds it.
-          # SENNET_EBPF_BINARY env var needs to point to something accessible in container.
-          
-          # Let's simplify: Copy binary to `agent/sennet_ebpf.bin` (root of crate).
-          # Set SENNET_EBPF_BINARY="sennet_ebpf.bin".
-          # build.rs reads it, copies to OUT_DIR.
-          
-          # IMPORTANT: Must be relative to Cargo.toml (which is CWD for cross) if using defaults,
-          # or relative to container root if absolute.
-          # Here we rely on build.rs resolving std::path::Path::new(&manifest_dir).join("src").join("sennet_ebpf.bin")
-          
-          # Since Cross.toml now passes this variable, we set it.
-          export SENNET_EBPF_BINARY="src/sennet_ebpf.bin" 
+          # We export this, but build.rs also checks default paths now.
+          # We point to the one in the root of the crate, which is usually mapped.
+          export SENNET_EBPF_BINARY="sennet_ebpf.bin" 
           
           cross build --release --target ${{ matrix.target }} --features embed_bpf
           mkdir -p ../dist
