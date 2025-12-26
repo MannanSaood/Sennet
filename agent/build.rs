@@ -17,6 +17,22 @@ fn main() {
             std::fs::copy(&source_path, &dest_path).expect("Failed to copy eBPF binary");
             println!("cargo:warning=Embedded eBPF binary from {}", source_path);
         } else {
+             // Debugging: List files in manifest dir to see what is mounted
+             eprintln!("DEBUG: Current Dir: {:?}", std::env::current_dir());
+             eprintln!("DEBUG: Manifest Dir: {}", manifest_dir);
+             if let Ok(entries) = std::fs::read_dir(&manifest_dir) {
+                 for entry in entries.flatten() {
+                     eprintln!("DEBUG: Found: {:?}", entry.path());
+                     if entry.path().is_dir() && entry.file_name() == "src" {
+                         // List src contents too
+                         if let Ok(src_entries) = std::fs::read_dir(entry.path()) {
+                             for src_entry in src_entries.flatten() {
+                                 eprintln!("DEBUG:   src/{:?}", src_entry.file_name());
+                             }
+                         }
+                     }
+                 }
+             }
              panic!("eBPF binary NOT FOUND at {}. Cannot build with feature embed_bpf.", source_path);
         }
     }

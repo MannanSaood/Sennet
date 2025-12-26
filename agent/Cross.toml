@@ -1,0 +1,4 @@
+[build.env]
+passthrough = [
+    "SENNET_EBPF_BINARY",
+]

@@ -118,7 +118,13 @@ jobs:
           # Set SENNET_EBPF_BINARY="sennet_ebpf.bin".
           # build.rs reads it, copies to OUT_DIR.
           
+          # IMPORTANT: Must be relative to Cargo.toml (which is CWD for cross) if using defaults,
+          # or relative to container root if absolute.
+          # Here we rely on build.rs resolving std::path::Path::new(&manifest_dir).join("src").join("sennet_ebpf.bin")
+          
+          # Since Cross.toml now passes this variable, we set it.
           export SENNET_EBPF_BINARY="src/sennet_ebpf.bin" 
+          
           cross build --release --target ${{ matrix.target }} --features embed_bpf
           mkdir -p ../dist
           cp target/${{ matrix.target }}/release/sennet ../dist/sennet-${{ matrix.name }}
