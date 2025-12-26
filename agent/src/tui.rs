@@ -21,6 +21,23 @@ struct AppState {
     tx_packets: u64,
     tx_bytes: u64,
     events: Vec<String>,
+    drop_events: Vec<DropEventDisplay>,  // Phase 6.3: Drop events panel
+}
+
+/// Display-ready drop event
+#[derive(Clone)]
+struct DropEventDisplay {
+    timestamp_secs: u64,
+    reason: String,
+    hook: Option<String>,  // From netfilter if available
+    severity: DropSeverity,
+}
+
+#[derive(Clone, Copy)]
+enum DropSeverity {
+    Security,  // Red - netfilter drops, socket filters
+    Config,    // Yellow - policy drops, routing issues
+    Normal,    // Gray - TCP retransmits, etc.
 }
 
 trait DataProvider {
@@ -30,16 +47,18 @@ trait DataProvider {
 // -----------------------------------------------------------------------------
 // Real Data Provider (Linux only) - Reads Pinned Maps
 #[cfg(target_os = "linux")]
-use aya::maps::{Map, MapData, PerCpuArray};
+use aya::maps::{Map, MapData, PerCpuArray, RingBuf};
 
 #[cfg(target_os = "linux")]
-use crate::ebpf::PacketCounters;
+use crate::ebpf::{PacketCounters, DropEvent};
 
 #[cfg(target_os = "linux")]
 struct RealDataProvider {
     counters: PerCpuArray<MapData, PacketCounters>,
+    drop_events_rb: Option<RingBuf<MapData>>,
     // Track last values to show delta/rates
     last_counters: PacketCounters,
+    start_time: Instant,
 }
 
 #[cfg(target_os = "linux")]
@@ -57,9 +76,30 @@ impl RealDataProvider {
         let map = Map::PerCpuArray(map_data);
         let counters: PerCpuArray<_, PacketCounters> = map.try_into()?;
         
+        // Try to open DROP_EVENTS RingBuf (Phase 6.1)
+        let drop_events_rb = {
+            let drop_path = Path::new("/sys/fs/bpf/sennet/drop_events");
+            if drop_path.exists() {
+                match MapData::from_pin(drop_path) {
+                    Ok(data) => {
+                        let map = Map::RingBuf(data);
+                        match map.try_into() {
+                            Ok(rb) => Some(rb),
+                            Err(_) => None,
+                        }
+                    }
+                    Err(_) => None,
+                }
+            } else {
+                None
+            }
+        };
+        
         Ok(Self { 
             counters,
+            drop_events_rb,
             last_counters: PacketCounters::default(),
+            start_time: Instant::now(),
         })
     }
     
@@ -85,6 +125,43 @@ impl RealDataProvider {
         
         Ok(total)
     }
+    
+    fn poll_drop_events(&mut self, state: &mut AppState) {
+        if let Some(ref mut rb) = self.drop_events_rb {
+            // Poll RingBuf for new events (non-blocking)
+            while let Some(item) = rb.next() {
+                if item.len() >= std::mem::size_of::<DropEvent>() {
+                    let event: DropEvent = unsafe {
+                        std::ptr::read_unaligned(item.as_ptr() as *const DropEvent)
+                    };
+                    
+                    // Convert to display format
+                    let elapsed_secs = self.start_time.elapsed().as_secs();
+                    let reason_str = sennet_common::drop_reason_str(event.reason);
+                    
+                    let severity = match event.reason {
+                        7 => DropSeverity::Security,   // NETFILTER_DROP
+                        5 => DropSeverity::Security,   // SOCKET_FILTER
+                        2 => DropSeverity::Config,     // NO_SOCKET
+                        37 => DropSeverity::Config,    // IP_OUTNOROUTES
+                        _ => DropSeverity::Normal,
+                    };
+                    
+                    let display = DropEventDisplay {
+                        timestamp_secs: elapsed_secs,
+                        reason: reason_str.to_string(),
+                        hook: None,
+                        severity,
+                    };
+                    
+                    state.drop_events.insert(0, display);
+                    if state.drop_events.len() > 20 {
+                        state.drop_events.pop();
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -103,6 +180,9 @@ impl DataProvider for RealDataProvider {
         if delta_rx > 1000 && state.events.len() < 20 {
             state.events.insert(0, format!("High RX rate: {} pkts/250ms", delta_rx));
         }
+        
+        // Poll drop events from RingBuf
+        self.poll_drop_events(state);
         
         self.last_counters = current;
         Ok(())
@@ -140,6 +220,20 @@ impl DataProvider for MockDataProvider {
            if state.events.len() > 20 { state.events.pop(); }
         }
         
+        // Simulate occasional drop events
+        if rand::random::<u8>() > 253 {
+            let reasons = ["NETFILTER_DROP", "NO_SOCKET", "TCP_RESET", "IP_OUTNOROUTES"];
+            let severities = [DropSeverity::Security, DropSeverity::Config, DropSeverity::Normal, DropSeverity::Config];
+            let idx = (elapsed as usize) % reasons.len();
+            state.drop_events.insert(0, DropEventDisplay {
+                timestamp_secs: elapsed as u64,
+                reason: reasons[idx].to_string(),
+                hook: Some("INPUT".to_string()),
+                severity: severities[idx],
+            });
+            if state.drop_events.len() > 20 { state.drop_events.pop(); }
+        }
+        
         Ok(())
     }
 }
@@ -162,6 +256,7 @@ pub fn run() -> Result<()> {
         tx_packets: 0,
         tx_bytes: 0,
         events: Vec::new(),
+        drop_events: Vec::new(),
     };
 
     // Choose Provider
@@ -229,9 +324,10 @@ fn ui(f: &mut ratatui::Frame, state: &AppState) {
         .margin(1)
         .constraints(
             [
-                Constraint::Length(3), // Header
-                Constraint::Length(8), // Stats
-                Constraint::Min(0),    // Events
+                Constraint::Length(3),  // Header
+                Constraint::Length(8),  // Stats
+                Constraint::Length(10), // Drops (Phase 6.3)
+                Constraint::Min(0),     // Events
             ]
             .as_ref(),
         )
@@ -268,7 +364,26 @@ fn ui(f: &mut ratatui::Frame, state: &AppState) {
         .block(Block::default().title("Traffic Stats").borders(Borders::ALL));
     f.render_widget(stats, chunks[1]);
 
-    // 3. Events
+    // 3. Drop Events (Phase 6.3)
+    let drop_items: Vec<ListItem> = state
+        .drop_events
+        .iter()
+        .map(|e| {
+            let color = match e.severity {
+                DropSeverity::Security => Color::Red,
+                DropSeverity::Config => Color::Yellow,
+                DropSeverity::Normal => Color::Gray,
+            };
+            let hook_str = e.hook.as_deref().unwrap_or("");
+            let text = format!("[{}s] {} {}", e.timestamp_secs, e.reason, hook_str);
+            ListItem::new(Span::styled(text, Style::default().fg(color)))
+        })
+        .collect();
+    let drops_list = List::new(drop_items)
+        .block(Block::default().title("Recent Drops (Phase 6)").borders(Borders::ALL));
+    f.render_widget(drops_list, chunks[2]);
+
+    // 4. Events
     let events: Vec<ListItem> = state
         .events
         .iter()
@@ -276,5 +391,6 @@ fn ui(f: &mut ratatui::Frame, state: &AppState) {
         .collect();
     let events_list = List::new(events)
         .block(Block::default().title("Recent Events").borders(Borders::ALL));
-    f.render_widget(events_list, chunks[2]);
+    f.render_widget(events_list, chunks[3]);
 }
+
