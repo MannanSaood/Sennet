@@ -3,9 +3,8 @@
 //! Automatically detects the default network interface for eBPF attachment.
 
 use anyhow::{Context, Result};
-use std::fs;
-use std::net::IpAddr;
 use std::path::Path;
+use std::fs;
 
 /// Information about a network interface
 #[derive(Debug, Clone)]
@@ -13,12 +12,14 @@ pub struct InterfaceInfo {
     /// Interface name (e.g., "eth0", "ens33")
     pub name: String,
     /// Interface index
+    #[allow(dead_code)]
     pub index: u32,
     /// Whether the interface is up
     pub is_up: bool,
     /// Whether this is a loopback interface
     pub is_loopback: bool,
     /// IPv4 addresses
+    #[allow(dead_code)]
     pub ipv4_addrs: Vec<String>,
 }
 

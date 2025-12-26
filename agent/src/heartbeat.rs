@@ -126,7 +126,8 @@ mod tests {
         std::thread::sleep(Duration::from_millis(100));
         
         let elapsed = start.elapsed().as_secs();
-        assert!(elapsed >= 0); // Just verify it doesn't panic
+        // Just verify it doesn't panic and we can get elapsed time
+        let _ = elapsed; 
     }
 
     #[test]

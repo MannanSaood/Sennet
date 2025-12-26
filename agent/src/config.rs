@@ -221,6 +221,7 @@ interface: eth0
 
     #[test]
     fn test_invalid_api_key_prefix() {
+        std::env::remove_var("SENNET_API_KEY");
         let dir = TempDir::new().unwrap();
         let config_content = r#"
 api_key: invalid_key

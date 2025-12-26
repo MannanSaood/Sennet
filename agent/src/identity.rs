@@ -26,6 +26,7 @@ pub struct IdentityState {
 /// Manages agent identity persistence
 pub struct IdentityManager {
     state: IdentityState,
+    #[allow(dead_code)]
     state_path: PathBuf,
 }
 
@@ -93,9 +94,10 @@ impl IdentityManager {
         Ok(())
     }
 
-    /// Update version and save
-    pub fn update_version(&mut self, version: &str) -> Result<()> {
-        self.state.version = version.to_string();
+    /// Update the agent version
+    #[allow(dead_code)]
+    pub fn update_version(&mut self, new_version: &str) -> Result<()> {
+        self.state.version = new_version.to_string();
         Self::save_state(&self.state_path, &self.state)
     }
 }
