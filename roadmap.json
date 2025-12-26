@@ -63,7 +63,9 @@
         "phase_7": "NOT_STARTED",
         "phase_8": "NOT_STARTED",
         "phase_9": "NOT_STARTED",
-        "phase_10": "NOT_STARTED"
+        "phase_10": "NOT_STARTED",
+        "phase_11": "NOT_STARTED",
+        "phase_12": "NOT_STARTED"
     },
     "execution_plan": [
         {
@@ -546,6 +548,95 @@
                     "validation": "Push new model, agent uses it within 1 heartbeat cycle."
                 }
             ]
+        },
+        {
+            "phase_id": 11,
+            "title": "Dashboard Experience Improvements",
+            "status": "NOT_STARTED",
+            "priority": "MEDIUM",
+            "track": "POLISH",
+            "objective": "Improve monitoring experience with built-in dashboard and Grafana auto-setup.",
+            "tools": {
+                "chart_library": "Chart.js (~60KB, industry standard for time-series)",
+                "grafana_api": "Grafana HTTP API for data source and dashboard provisioning",
+                "auth": "API key required by default, --anonymous flag for open setups"
+            },
+            "steps": [
+                {
+                    "id": "11.1",
+                    "task": "Grafana One-Click Setup",
+                    "context": "Auto-import Sennet dashboard to user's Grafana.",
+                    "actions": [
+                        "Implement `sennet-server grafana-setup` CLI command.",
+                        "Accept flags: --grafana-url, --api-key, --anonymous.",
+                        "Create Prometheus data source pointing to Sennet /metrics.",
+                        "Import dashboards/overview.json via Grafana API.",
+                        "Verify dashboard loads correctly."
+                    ],
+                    "validation": "Run command, dashboard appears in Grafana."
+                },
+                {
+                    "id": "11.2",
+                    "task": "Built-in Web Dashboard",
+                    "context": "Embedded dashboard at /dashboard route in backend.",
+                    "actions": [
+                        "Add /dashboard route serving static HTML.",
+                        "Use Chart.js for time-series graphs.",
+                        "Panels: Packets/sec, Bytes/sec, Active Agents, Drops.",
+                        "Fetch data from /metrics endpoint.",
+                        "Auto-refresh every 5 seconds."
+                    ],
+                    "validation": "Open http://server:8080/dashboard, see live graphs."
+                }
+            ]
+        },
+        {
+            "phase_id": 12,
+            "title": "SaaS Onboarding & Quick Start",
+            "status": "NOT_STARTED",
+            "priority": "LOW",
+            "track": "POLISH",
+            "objective": "Streamline first-time user experience with Quick Start menu and optional SaaS backend.",
+            "steps": [
+                {
+                    "id": "12.1",
+                    "task": "Quick Start Menu in sennet init",
+                    "context": "Guide new users to either SaaS or self-hosted setup.",
+                    "actions": [
+                        "Modify `sennet init` to show menu:",
+                        "  [1] Quick Start (use Sennet Cloud - free tier)",
+                        "  [2] Self-Hosted (bring your own backend)",
+                        "Option 1: Open browser to registration page, wait for API key.",
+                        "Option 2: Prompt for server URL and API key (current flow)."
+                    ],
+                    "validation": "New user can get running in <2 minutes with Quick Start."
+                },
+                {
+                    "id": "12.2",
+                    "task": "Sennet Cloud Landing Page",
+                    "context": "Simple registration page for SaaS users.",
+                    "actions": [
+                        "Create landing page at sennet.dev (or GitHub Pages).",
+                        "Email signup with Clerk/Auth0/Supabase Auth.",
+                        "Generate API key on registration.",
+                        "Display API key with copy button.",
+                        "Free tier: 1 agent, 7-day retention."
+                    ],
+                    "validation": "User signs up, gets API key, pastes into CLI."
+                },
+                {
+                    "id": "12.3",
+                    "task": "Managed Backend Infrastructure",
+                    "context": "Multi-tenant SaaS backend for Sennet Cloud.",
+                    "actions": [
+                        "Deploy managed Sennet backend (Render/Fly.io).",
+                        "Add tenant isolation to database.",
+                        "Rate limiting per API key.",
+                        "Usage tracking for billing."
+                    ],
+                    "validation": "Multiple users can use same backend with isolated data."
+                }
+            ]
         }
     ],
     "cli_commands": {
@@ -608,6 +699,8 @@
         "Phase 7: K8s NetworkPolicy Correlation (HIGH - enterprise value)",
         "Phase 8: Process Attribution (MEDIUM - nice-to-have)",
         "Phase 9: Cloud Egress Auditor (MEDIUM - SaaS revenue)",
-        "Phase 10: Edge AI Sentinel (LOW - advanced feature)"
+        "Phase 10: Edge AI Sentinel (LOW - advanced feature)",
+        "Phase 11: Dashboard Experience (MEDIUM - polish)",
+        "Phase 12: SaaS Onboarding (LOW - growth)"
     ]
 }
