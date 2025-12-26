@@ -121,10 +121,26 @@ impl EbpfManager {
         // Load the eBPF binary
         // During CI/Cross build, build.rs copies binary to OUT_DIR/sennet_ebpf.bin
         #[cfg(feature = "embed_bpf")]
-        let mut bpf = Bpf::load(include_bytes!(concat!(env!("OUT_DIR"), "/sennet_ebpf.bin")))?;
+        let ebpf_bytes: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sennet_ebpf.bin"));
         
         #[cfg(not(feature = "embed_bpf"))]
-        let mut bpf = Bpf::load(include_bytes!("../../sennet-ebpf/target/bpfel-unknown-none/release/sennet-ebpf"))?;
+        let ebpf_bytes: &[u8] = include_bytes!("../../sennet-ebpf/target/bpfel-unknown-none/release/sennet-ebpf");
+        
+        // Debug: Log embedded binary info
+        tracing::info!("eBPF binary size: {} bytes", ebpf_bytes.len());
+        if ebpf_bytes.len() >= 4 {
+            tracing::info!(
+                "eBPF ELF magic: {:02x} {:02x} {:02x} {:02x} (expected: 7f 45 4c 46 = ELF)",
+                ebpf_bytes[0], ebpf_bytes[1], ebpf_bytes[2], ebpf_bytes[3]
+            );
+        }
+        if ebpf_bytes.len() >= 18 {
+            // e_type at offset 16 (2 bytes, little-endian): 3 = shared, 0xff = BPF
+            let e_type = u16::from_le_bytes([ebpf_bytes[16], ebpf_bytes[17]]);
+            tracing::info!("eBPF ELF e_type: {} (3=ET_DYN/shared, 0xff00=BPF)", e_type);
+        }
+        
+        let mut bpf = Bpf::load(ebpf_bytes)?;
         
         // Pin path for maps
         let pin_path = Path::new("/sys/fs/bpf/sennet");
