@@ -140,7 +140,26 @@ impl EbpfManager {
             tracing::info!("eBPF ELF e_type: {} (3=ET_DYN/shared, 0xff00=BPF)", e_type);
         }
         
-        let mut bpf = Bpf::load(ebpf_bytes)?;
+        // Check for BTF sections
+        let has_btf = ebpf_bytes.windows(4).any(|w| w == b".BTF");
+        tracing::info!("eBPF contains BTF sections: {}", has_btf);
+        
+        let mut bpf = match Bpf::load(ebpf_bytes) {
+            Ok(b) => b,
+            Err(e) => {
+                // Log detailed error chain
+                tracing::error!("eBPF load failed: {}", e);
+                tracing::error!("Error debug: {:?}", e);
+                // Try to get more details about the error source
+                if let Some(source) = std::error::Error::source(&e) {
+                    tracing::error!("Caused by: {}", source);
+                    if let Some(source2) = std::error::Error::source(source) {
+                        tracing::error!("Caused by: {}", source2);
+                    }
+                }
+                return Err(e.into());
+            }
+        };
         
         // Pin path for maps
         let pin_path = Path::new("/sys/fs/bpf/sennet");
