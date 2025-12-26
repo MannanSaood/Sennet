@@ -53,6 +53,9 @@ use aya::maps::{Map, MapData, PerCpuArray, RingBuf};
 use crate::ebpf::{PacketCounters, DropEvent};
 
 #[cfg(target_os = "linux")]
+use sennet_common::drop_reason_str;
+
+#[cfg(target_os = "linux")]
 struct RealDataProvider {
     counters: PerCpuArray<MapData, PacketCounters>,
     drop_events_rb: Option<RingBuf<MapData>>,
@@ -137,7 +140,7 @@ impl RealDataProvider {
                     
                     // Convert to display format
                     let elapsed_secs = self.start_time.elapsed().as_secs();
-                    let reason_str = sennet_common::drop_reason_str(event.reason);
+                    let reason_str = drop_reason_str(event.reason);
                     
                     let severity = match event.reason {
                         7 => DropSeverity::Security,   // NETFILTER_DROP
