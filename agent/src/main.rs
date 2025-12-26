@@ -110,7 +110,7 @@ async fn main() -> Result<()> {
     };
 
     // Discover network interface
-    let interface = match interface::discover_default_interface(config.interface.as_deref()) {
+    let _interface = match interface::discover_default_interface(config.interface.as_deref()) {
         Ok(iface) => {
             info!("Network interface: {}", iface);
             iface

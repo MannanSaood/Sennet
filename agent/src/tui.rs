@@ -46,7 +46,7 @@ impl RealDataProvider {
 
 #[cfg(target_os = "linux")]
 impl DataProvider for RealDataProvider {
-    fn update(&mut self, state: &mut AppState) -> Result<()> {
+    fn update(&mut self, _state: &mut AppState) -> Result<()> {
         // TODO: Use aya::maps::PerCpuArray::try_from(Map::from_pin(...)?)
         // For MVP without ability to verify eBPF compilation locally, 
         // we will stick to a stub here that would ideally read the maps.

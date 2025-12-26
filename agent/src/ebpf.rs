@@ -102,7 +102,7 @@ impl EbpfManager {
         let sum_values = |index: u32| -> Result<PacketCounters> {
             let values = counters_map.get(&index, 0)?;
             let mut sum = PacketCounters::default();
-            for cpu_val in values {
+            for cpu_val in values.iter() {
                 sum.rx_packets += cpu_val.rx_packets;
                 sum.rx_bytes += cpu_val.rx_bytes;
                 sum.tx_packets += cpu_val.tx_packets;
