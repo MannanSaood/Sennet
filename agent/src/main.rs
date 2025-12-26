@@ -12,11 +12,13 @@ mod ebpf;
 mod upgrade;
 mod status;
 mod tui;
+mod init;
 
 use anyhow::Result;
 use tracing::{info, error, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use tokio::signal;
+use colored::Colorize;
 
 use crate::config::Config;
 use crate::identity::IdentityManager;
@@ -26,11 +28,31 @@ use crate::upgrade::Updater;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing
+    // Check for CLI commands first (before tracing init for cleaner output)
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 {
+        match args[1].as_str() {
+            "init" => {
+                // Init doesn't need tracing - it's interactive
+                return init::run();
+            }
+            "help" | "--help" | "-h" => {
+                print_help();
+                return Ok(());
+            }
+            "version" | "--version" | "-v" => {
+                println!("sennet v{}", upgrade::CURRENT_VERSION);
+                return Ok(());
+            }
+            // Commands below need tracing
+            _ => {}
+        }
+    }
+
+    // Initialize tracing for remaining commands
     init_tracing();
 
-    // Check for CLI commands
-    let args: Vec<String> = std::env::args().collect();
+    // Handle remaining commands
     if args.len() > 1 {
         match args[1].as_str() {
             "upgrade" => {
@@ -58,26 +80,10 @@ async fn main() -> Result<()> {
                 tui::run()?;
                 return Ok(());
             }
-            "version" | "--version" | "-v" => {
-                println!("sennet v{}", upgrade::CURRENT_VERSION);
-                return Ok(());
-            }
-            "help" | "--help" | "-h" => {
-                println!("Sennet Agent - Network Observability");
-                println!();
-                println!("USAGE:");
-                println!("    sennet [COMMAND]");
-                println!();
-                println!("COMMANDS:");
-                println!("    (none)     Run the agent");
-                println!("    upgrade    Check for and install updates");
-                println!("    version    Print version information");
-                println!("    help       Print this help message");
-                return Ok(());
-            }
-            _ => {
-                error!("Unknown command: {}", args[1]);
-                error!("Run 'sennet help' for usage");
+            cmd => {
+                eprintln!("{} Unknown command: '{}'", "Error:".red(), cmd);
+                eprintln!();
+                eprintln!("Run '{}' for a list of available commands.", "sennet help".cyan());
                 std::process::exit(1);
             }
         }
@@ -152,6 +158,36 @@ fn init_tracing() {
         .with(filter)
         .with(tracing_subscriber::fmt::layer())
         .init();
+}
+
+fn print_help() {
+    println!("{}", "Sennet Agent - Network Observability".bold());
+    println!("High-performance network monitoring with eBPF");
+    println!();
+    println!("{}", "USAGE:".yellow());
+    println!("    sennet [COMMAND]");
+    println!();
+    println!("{}", "COMMANDS:".yellow());
+    println!("    {}       Run the agent daemon", "(none)".cyan());
+    println!("    {}        Initialize configuration interactively", "init".cyan());
+    println!("    {}      Display agent status and connection info", "status".cyan());
+    println!("    {}         Live traffic monitoring dashboard", "top".cyan());
+    println!("    {}     Check for and install updates", "upgrade".cyan());
+    println!("    {}     Print version information", "version".cyan());
+    println!("    {}        Show this help message", "help".cyan());
+    println!();
+    println!("{}", "EXAMPLES:".yellow());
+    println!("    sennet init              # Configure the agent");
+    println!("    sudo sennet              # Run as daemon");
+    println!("    sennet status            # Check agent status");
+    println!("    sennet top               # Monitor traffic live");
+    println!();
+    println!("{}", "CONFIGURATION:".yellow());
+    println!("    Config file: /etc/sennet/config.yaml");
+    println!("    Or use environment variables:");
+    println!("      SENNET_API_KEY, SENNET_SERVER_URL");
+    println!();
+    println!("For more information, visit: https://github.com/MannanSaood/Sennet");
 }
 
 async fn shutdown_signal() {
