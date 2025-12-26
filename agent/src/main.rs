@@ -127,7 +127,7 @@ async fn main() -> Result<()> {
     };
 
     // Discover network interface
-    let _interface = match interface::discover_default_interface(config.interface.as_deref()) {
+    let interface = match interface::discover_default_interface(config.interface.as_deref()) {
         Ok(iface) => {
             info!("Network interface: {}", iface);
             iface
@@ -136,6 +136,29 @@ async fn main() -> Result<()> {
             warn!("Interface discovery failed: {}. eBPF will be disabled.", e);
             String::new()
         }
+    };
+
+    // Load and attach eBPF programs (Linux only)
+    #[cfg(target_os = "linux")]
+    let _ebpf_manager = if !interface.is_empty() {
+        match ebpf::EbpfManager::load_and_attach(&interface) {
+            Ok(mgr) => {
+                info!("eBPF programs loaded successfully");
+                if mgr.drop_tracing_enabled {
+                    info!("Drop tracing: enabled (kfree_skb tracepoint attached)");
+                }
+                if mgr.nf_tracing_enabled {
+                    info!("Netfilter tracing: enabled (nf_hook_slow tracepoint attached)");
+                }
+                Some(mgr)
+            }
+            Err(e) => {
+                warn!("Failed to load eBPF programs: {}. Continuing without packet analysis.", e);
+                None
+            }
+        }
+    } else {
+        None
     };
 
     // Create client
