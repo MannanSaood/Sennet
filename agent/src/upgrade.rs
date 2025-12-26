@@ -105,7 +105,12 @@ impl Updater {
             self.repo, version, filename
         );
 
-        let temp_path = std::env::temp_dir().join("sennet_new");
+        let temp_path = std::env::temp_dir().join(format!("sennet_upgrade_{}", std::process::id()));
+        
+        // Try to remove any stale temp file first (ignore errors)
+        let _ = fs::remove_file(&temp_path);
+
+        tracing::info!("Downloaded to {:?}", temp_path);
 
         let response = ureq::get(&url)
             .call()
@@ -251,7 +256,7 @@ pub fn needs_upgrade(current: &str, latest: &str) -> bool {
 fn sha256_hex(data: &[u8]) -> String {
     // Simple SHA256 implementation using system command (fallback)
     // In production, use the `sha2` crate
-    let temp = std::env::temp_dir().join("sennet_checksum_tmp");
+    let temp = std::env::temp_dir().join(format!("sennet_checksum_{}", std::process::id()));
     if fs::write(&temp, data).is_ok() {
         if let Ok(output) = Command::new("sha256sum")
             .arg(&temp)
