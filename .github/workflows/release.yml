@@ -96,19 +96,35 @@ jobs:
           
       - name: Build agent (Static Binary)
         run: |
-          set -x # Print commands for debugging
+          set -e  # Exit immediately on any error
+          set -x  # Print commands for debugging
           
-          echo "Debugging: Finding all files in workspace"
-          find . -maxdepth 4 -not -path '*/.*'
+          # Define source path for eBPF artifact
+          SOURCE="agent/sennet-ebpf/target/bpfel-unknown-none/release/sennet-ebpf"
           
-          # Copy eBPF binary to multiple potential locations (ignoring errors with || true to continue debug)
-          echo "Copying eBPF binary..."
-          cp agent/sennet-ebpf/target/bpfel-unknown-none/release/sennet-ebpf agent/src/sennet_ebpf.bin || echo "Failed copy to src/"
-          cp agent/sennet-ebpf/target/bpfel-unknown-none/release/sennet-ebpf agent/sennet_ebpf.bin || echo "Failed copy to root/"
+          # Verify the downloaded artifact exists
+          echo "=== Verifying eBPF artifact ==="
+          if [ ! -f "$SOURCE" ]; then
+            echo "ERROR: eBPF artifact not found at $SOURCE"
+            echo "Listing agent/sennet-ebpf/target/:"
+            ls -laR agent/sennet-ebpf/target/ || echo "Target dir does not exist"
+            exit 1
+          fi
+          ls -la "$SOURCE"
+          
+          # Copy to locations where build.rs will find it
+          echo "=== Copying eBPF binary ==="
+          cp "$SOURCE" agent/src/sennet_ebpf.bin
+          cp "$SOURCE" agent/sennet_ebpf.bin
+          
+          # Verify copies succeeded
+          ls -la agent/sennet_ebpf.bin
+          ls -la agent/src/sennet_ebpf.bin
           
           cd agent
           
-          export SENNET_EBPF_BINARY="sennet_ebpf.bin" 
+          # Set env var for build.rs (relative to agent/ dir which becomes /project in cross)
+          export SENNET_EBPF_BINARY="sennet_ebpf.bin"
           
           cross build --release --target ${{ matrix.target }} --features embed_bpf
           mkdir -p ../dist
