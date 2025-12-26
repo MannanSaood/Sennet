@@ -50,10 +50,7 @@ trait DataProvider {
 use aya::maps::{Map, MapData, PerCpuArray, RingBuf};
 
 #[cfg(target_os = "linux")]
-use crate::ebpf::{PacketCounters, DropEvent};
-
-#[cfg(target_os = "linux")]
-use sennet_common::drop_reason_str;
+use crate::ebpf::{PacketCounters, DropEvent, drop_reason_str};
 
 #[cfg(target_os = "linux")]
 struct RealDataProvider {

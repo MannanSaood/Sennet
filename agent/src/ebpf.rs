@@ -38,6 +38,41 @@ pub struct DropEvent {
 #[cfg(target_os = "linux")]
 unsafe impl aya::Pod for DropEvent {}
 
+/// Human-readable drop reason string (from sk_drop_reason enum)
+pub fn drop_reason_str(reason: u32) -> &'static str {
+    match reason {
+        1 => "NOT_SPECIFIED",
+        2 => "NO_SOCKET",
+        3 => "PKT_TOO_SMALL",
+        4 => "TCP_CSUM",
+        5 => "SOCKET_FILTER",
+        6 => "UDP_CSUM",
+        7 => "NETFILTER_DROP",
+        8 => "OTHERHOST",
+        9 => "IP_CSUM",
+        10 => "IP_INHDR",
+        11 => "IP_RPFILTER",
+        13 => "XFRM_POLICY",
+        14 => "IP_NOPROTO",
+        15 => "SOCKET_RCVBUFF",
+        16 => "PROTO_MEM",
+        20 => "SOCKET_BACKLOG",
+        21 => "TCP_FLAGS",
+        22 => "TCP_ZEROWINDOW",
+        23 => "TCP_OLD_DATA",
+        24 => "TCP_OVERWINDOW",
+        27 => "TCP_INVALID_SEQ",
+        28 => "TCP_RESET",
+        30 => "TCP_CLOSE",
+        37 => "IP_OUTNOROUTES",
+        38 => "BPF_CGROUP_EGRESS",
+        41 => "NEIGH_FAILED",
+        42 => "NEIGH_QUEUEFULL",
+        44 => "TC_EGRESS",
+        _ => "UNKNOWN",
+    }
+}
+
 /// Netfilter event structure (mirrors eBPF side)
 /// Used for nf_hook_slow tracepoint events (Phase 6.2)
 #[repr(C)]
