@@ -9,7 +9,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Span, Line},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Gauge},
+    widgets::{Block, Borders, List, ListItem, Paragraph},
     Terminal,
 };
 use std::{io, time::{Duration, Instant}};
@@ -112,10 +112,10 @@ pub fn run() -> Result<()> {
 
     // Choose Provider
     #[cfg(target_os = "linux")]
-    let mut provider: Box<dyn DataProvider> = Box::new(RealDataProvider::new().unwrap_or_else(|_| {
-        // Fallback to mock if real fails (e.g. no pinned maps)
-        Box::new(MockDataProvider::new())
-    }));
+    let mut provider: Box<dyn DataProvider> = match RealDataProvider::new() {
+        Ok(real) => Box::new(real),
+        Err(_) => Box::new(MockDataProvider::new()), // Fallback to mock if real fails
+    };
 
     #[cfg(not(target_os = "linux"))]
     let mut provider: Box<dyn DataProvider> = Box::new(MockDataProvider::new());

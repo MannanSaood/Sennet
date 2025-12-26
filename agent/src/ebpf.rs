@@ -6,6 +6,7 @@
 use anyhow::Result;
 
 /// Packet counters structure (mirrors eBPF side)
+/// Must implement Pod trait for use with aya maps
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct PacketCounters {
@@ -16,22 +17,26 @@ pub struct PacketCounters {
     pub drop_count: u64,
 }
 
+// SAFETY: PacketCounters is #[repr(C)], contains only u64 fields,
+// and has no padding. It is safe to interpret as bytes.
+#[cfg(target_os = "linux")]
+unsafe impl aya::Pod for PacketCounters {}
+
 #[cfg(target_os = "linux")]
 use {
     aya::{
         programs::{tc, SchedClassifier, TcAttachType},
-        maps::{PerCpuArray, RingBuf, MapData},
+        maps::PerCpuArray,
         Bpf,
     },
     std::path::Path,
 };
 
-// ... (PacketCounters struct remains same)
-
 /// eBPF program manager
 pub struct EbpfManager {
     interface: String,
     #[cfg(target_os = "linux")]
+    #[allow(dead_code)]
     bpf: Bpf,
 }
 
@@ -41,7 +46,6 @@ impl EbpfManager {
     pub fn load_and_attach(interface: &str) -> Result<Self> {
         tracing::info!("Loading eBPF programs...");
         
-        // Load the eBPF binary (must be built previously)
         // Load the eBPF binary
         // During CI/Cross build, build.rs copies binary to OUT_DIR/sennet_ebpf.bin
         #[cfg(feature = "embed_bpf")]
@@ -56,20 +60,20 @@ impl EbpfManager {
             std::fs::create_dir_all(pin_path)?;
         }
 
-        // Load and Pin Maps
+        // Pin COUNTERS map using the Map trait's pin method
         tracing::info!("Pinning maps to /sys/fs/bpf/sennet...");
+        if let Some(map) = bpf.map_mut("COUNTERS") {
+            let _ = map.pin(pin_path.join("counters")); // Ignore if already pinned
+        }
         
-        // Pin COUNTERS
-        let mut counters: PerCpuArray<_, u32> = PerCpuArray::try_from(bpf.map_mut("COUNTERS").unwrap())?;
-        counters.pin(pin_path.join("counters")).ok(); // Ignore if already pinned
-
-        // Pin EVENTS
-        let mut events: RingBuf<_> = RingBuf::try_from(bpf.map_mut("EVENTS").unwrap())?;
-        events.pin(pin_path.join("events")).ok();
+        // Note: RingBuf in aya 0.12 doesn't support pinning via this API
+        // We skip pinning EVENTS for now - the map is still usable
 
         // Attach TC Programs
         tracing::info!("Attaching eBPF to interface {}", interface);
-        let _ = tc::qdisc::add_clsact(interface); // Ignore error if qdisc exists
+        
+        // Add clsact qdisc to the interface (ignore error if it already exists)
+        let _ = tc::qdisc_add_clsact(interface);
         
         let ingress: &mut SchedClassifier = bpf.program_mut("tc_ingress").unwrap().try_into()?;
         ingress.load()?;
@@ -88,15 +92,13 @@ impl EbpfManager {
     /// Read current counters from eBPF maps
     #[cfg(target_os = "linux")]
     pub fn read_counters(&self) -> Result<PacketCounters> {
-        let counters_map: PerCpuArray<_, PacketCounters> = PerCpuArray::try_from(self.bpf.map("COUNTERS").unwrap())?;
+        let counters_map: PerCpuArray<_, PacketCounters> = 
+            PerCpuArray::try_from(self.bpf.map("COUNTERS").unwrap())?;
         
         // Sum across all CPUs
         let mut total = PacketCounters::default();
-        // Since PerCpuArray iteration is complex without proper helpers, 
-        // and we are running in same process, we can just grab index 0 and 1.
-        // Wait, PerCpuArray.get(index, flags) returns a generic `Values` which is Vec<T> per cpu.
         
-        // Helper to sum counters
+        // Helper to sum counters for a given index
         let sum_values = |index: u32| -> Result<PacketCounters> {
             let values = counters_map.get(&index, 0)?;
             let mut sum = PacketCounters::default();
@@ -117,7 +119,7 @@ impl EbpfManager {
         total.rx_bytes = ingress.rx_bytes;
         total.tx_packets = egress.tx_packets;
         total.tx_bytes = egress.tx_bytes;
-        total.drop_count = ingress.drop_count; // Drops only tracked on ingress currently logic wise
+        total.drop_count = ingress.drop_count;
 
         Ok(total)
     }
@@ -135,7 +137,6 @@ impl EbpfManager {
     pub fn read_counters(&self) -> Result<PacketCounters> {
         Ok(PacketCounters::default())
     }
-
 
     /// Get the attached interface name
     pub fn interface(&self) -> &str {

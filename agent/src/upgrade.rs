@@ -249,8 +249,6 @@ pub fn needs_upgrade(current: &str, latest: &str) -> bool {
 
 /// Calculate SHA256 hex digest
 fn sha256_hex(data: &[u8]) -> String {
-    use std::fmt::Write;
-    
     // Simple SHA256 implementation using system command (fallback)
     // In production, use the `sha2` crate
     let temp = std::env::temp_dir().join("sennet_checksum_tmp");
