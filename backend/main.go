@@ -94,13 +94,16 @@ func runServer(port, dbPath, latestVersion string) {
 	}
 	defer database.Close()
 
-	// Check for INIT_API_KEY environment variable (for ephemeral deployments like Koyeb)
+	// Check for INIT_API_KEY environment variable (for ephemeral deployments like Render)
 	if initKey := os.Getenv("INIT_API_KEY"); initKey != "" {
+		log.Printf("  Found INIT_API_KEY (length=%d, prefix=%s...)", len(initKey), initKey[:min(10, len(initKey))])
 		if err := database.EnsureAPIKey(initKey, "init-key"); err != nil {
 			log.Printf("Warning: Failed to seed initial API key: %v", err)
 		} else {
-			log.Printf("  Initial API key loaded from environment")
+			log.Printf("  Initial API key loaded successfully")
 		}
+	} else {
+		log.Printf("  No INIT_API_KEY environment variable set")
 	}
 
 	// Create handler
