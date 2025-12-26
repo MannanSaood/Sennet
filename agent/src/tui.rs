@@ -30,27 +30,80 @@ trait DataProvider {
 // -----------------------------------------------------------------------------
 // Real Data Provider (Linux only) - Reads Pinned Maps
 #[cfg(target_os = "linux")]
+use aya::maps::{MapData, PerCpuArray};
+
+#[cfg(target_os = "linux")]
+use crate::ebpf::PacketCounters;
+
+#[cfg(target_os = "linux")]
 struct RealDataProvider {
-    // fields to access maps
+    counters: PerCpuArray<MapData, PacketCounters>,
+    // Track last values to show delta/rates
+    last_counters: PacketCounters,
 }
 
 #[cfg(target_os = "linux")]
 impl RealDataProvider {
     fn new() -> Result<Self> {
-        // In a real implementation, we would open the pinned maps here
-        // For this task, we will simulate reading from maps if we can't open them
-        // to prevent crashing if the service isn't running.
-        Ok(Self {})
+        use aya::maps::Map;
+        use std::path::Path;
+        
+        let pin_path = Path::new("/sys/fs/bpf/sennet/counters");
+        if !pin_path.exists() {
+            anyhow::bail!("Pinned map not found at {:?}. Is the agent running?", pin_path);
+        }
+        
+        let map = Map::from_pin(pin_path)?;
+        let counters: PerCpuArray<_, PacketCounters> = map.try_into()?;
+        
+        Ok(Self { 
+            counters,
+            last_counters: PacketCounters::default(),
+        })
+    }
+    
+    fn read_totals(&self) -> Result<PacketCounters> {
+        let mut total = PacketCounters::default();
+        
+        // Read ingress counters (index 0)
+        if let Ok(values) = self.counters.get(&0, 0) {
+            for cpu_val in values.iter() {
+                total.rx_packets += cpu_val.rx_packets;
+                total.rx_bytes += cpu_val.rx_bytes;
+                total.drop_count += cpu_val.drop_count;
+            }
+        }
+        
+        // Read egress counters (index 1)
+        if let Ok(values) = self.counters.get(&1, 0) {
+            for cpu_val in values.iter() {
+                total.tx_packets += cpu_val.tx_packets;
+                total.tx_bytes += cpu_val.tx_bytes;
+            }
+        }
+        
+        Ok(total)
     }
 }
 
 #[cfg(target_os = "linux")]
 impl DataProvider for RealDataProvider {
-    fn update(&mut self, _state: &mut AppState) -> Result<()> {
-        // TODO: Use aya::maps::PerCpuArray::try_from(Map::from_pin(...)?)
-        // For MVP without ability to verify eBPF compilation locally, 
-        // we will stick to a stub here that would ideally read the maps.
-        // If maps are not pinned, we can't read them.
+    fn update(&mut self, state: &mut AppState) -> Result<()> {
+        let current = self.read_totals()?;
+        
+        // Update state with current totals
+        state.rx_packets = current.rx_packets;
+        state.rx_bytes = current.rx_bytes;
+        state.tx_packets = current.tx_packets;
+        state.tx_bytes = current.tx_bytes;
+        
+        // Add event if significant traffic delta detected
+        let delta_rx = current.rx_packets.saturating_sub(self.last_counters.rx_packets);
+        if delta_rx > 1000 && state.events.len() < 20 {
+            state.events.insert(0, format!("High RX rate: {} pkts/250ms", delta_rx));
+        }
+        
+        self.last_counters = current;
         Ok(())
     }
 }
