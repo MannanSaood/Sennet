@@ -30,7 +30,7 @@ trait DataProvider {
 // -----------------------------------------------------------------------------
 // Real Data Provider (Linux only) - Reads Pinned Maps
 #[cfg(target_os = "linux")]
-use aya::maps::{MapData, PerCpuArray};
+use aya::maps::{Map, MapData, PerCpuArray};
 
 #[cfg(target_os = "linux")]
 use crate::ebpf::PacketCounters;
@@ -52,9 +52,10 @@ impl RealDataProvider {
             anyhow::bail!("Pinned map not found at {:?}. Is the agent running?", pin_path);
         }
         
-        // Use MapData::from_pin (not Map::from_pin) in aya 0.12
+        // In aya 0.12: MapData::from_pin -> Map::PerCpuArray -> PerCpuArray::try_from(Map)
         let map_data = MapData::from_pin(pin_path)?;
-        let counters: PerCpuArray<_, PacketCounters> = PerCpuArray::try_from(map_data)?;
+        let map = Map::PerCpuArray(map_data);
+        let counters: PerCpuArray<_, PacketCounters> = map.try_into()?;
         
         Ok(Self { 
             counters,
