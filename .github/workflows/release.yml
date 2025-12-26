@@ -47,13 +47,14 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@nightly
         with:
-          components: rust-src
+          components: rust-src, llvm-tools-preview
           
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm libelf-dev
-          cargo install bpf-linker
+          sudo apt-get install -y libelf-dev
+          # Install bpf-linker using rustc's bundled LLVM to avoid version mismatch
+          cargo install bpf-linker --no-default-features
           
       - name: Build eBPF
         run: |
