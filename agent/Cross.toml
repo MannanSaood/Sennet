@@ -1,0 +1,9 @@
+# Cross compilation configuration for Sennet Agent
+# Docs: https://github.com/cross-rs/cross
+
+[build.env]
+# Pass environment variables to the build container
+# SENNET_EBPF_BINARY must be passed so build.rs can find the eBPF binary
+passthrough = [
+    "SENNET_EBPF_BINARY",
+]
