@@ -93,7 +93,7 @@ fn check_backend_connection() -> bool {
     // Check for recent heartbeat success
     let output = Command::new("bash")
         .arg("-c")
-        .arg("journalctl -u sennet -n 20 --since '1 minute ago' | grep 'Heartbeat sent successfully'")
+        .arg("journalctl -u sennet -n 20 --since '2 minutes ago' | grep -E 'Heartbeat successful|heartbeat'")
         .output();
 
     match output {

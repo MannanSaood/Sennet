@@ -39,7 +39,7 @@ impl HeartbeatLoop {
         loop {
             match self.send_heartbeat() {
                 Ok(response) => {
-                    debug!("Heartbeat successful: {:?}", response.command);
+                    info!("Heartbeat successful, command: {:?}", response.command);
                     self.handle_command(&response.command, &response.latest_version);
                 }
                 Err(e) => {
