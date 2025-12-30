@@ -52,7 +52,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-19 llvm-19 libelf-dev
+          sudo apt-get install -y clang-19 llvm-19 llvm-19-dev libpolly-19-dev libelf-dev
           # Install bpf-linker with matching LLVM version
           cargo install bpf-linker --features llvm-19
           
