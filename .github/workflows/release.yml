@@ -51,10 +51,14 @@ jobs:
           
       - name: Install dependencies
         run: |
+          # Add LLVM repo for LLVM 21
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy main" | sudo tee /etc/apt/sources.list.d/llvm.list
           sudo apt-get update
-          sudo apt-get install -y clang-19 llvm-19 llvm-19-dev libpolly-19-dev libelf-dev
-          # Install bpf-linker with matching LLVM version (disable defaults to avoid llvm-21 conflict)
-          cargo install bpf-linker --no-default-features --features llvm-19
+          sudo apt-get install -y clang-21 llvm-21 llvm-21-dev libpolly-21-dev libelf-dev || \
+            sudo apt-get install -y clang llvm llvm-dev libelf-dev
+          # Install bpf-linker with LLVM 21 to match Rust nightly
+          cargo install bpf-linker --no-default-features --features llvm-21
           
       - name: Build eBPF
         run: |
