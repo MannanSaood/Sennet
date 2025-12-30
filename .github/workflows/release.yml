@@ -47,16 +47,16 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          # Pin to nightly that uses LLVM 19 (before LLVM 21 update)
-          toolchain: nightly-2024-10-01
+          # Pin to nightly that uses LLVM 18
+          toolchain: nightly-2024-06-01
           components: rust-src
           
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-19 llvm-19 llvm-19-dev libpolly-19-dev libelf-dev
-          # Install bpf-linker with LLVM 19 to match pinned nightly
-          cargo install bpf-linker --no-default-features --features llvm-19
+          sudo apt-get install -y clang-18 llvm-18 llvm-18-dev libpolly-18-dev libelf-dev
+          # Install bpf-linker with LLVM 18 to match pinned nightly
+          cargo install bpf-linker --no-default-features --features llvm-18
           
       - name: Build eBPF
         run: |
@@ -64,7 +64,7 @@ jobs:
           # Build with BTF (BPF Type Format) for aya 0.12+ compatibility
           # -C debuginfo=2: Include debug info for BTF
           # -C link-arg=--btf: Tell bpf-linker to generate BTF sections
-          RUSTFLAGS="-C debuginfo=2 -C link-arg=--btf" cargo +nightly-2024-10-01 build --target bpfel-unknown-none -Z build-std=core --release
+          RUSTFLAGS="-C debuginfo=2 -C link-arg=--btf" cargo +nightly-2024-06-01 build --target bpfel-unknown-none -Z build-std=core --release
           
       - name: Upload eBPF artifact
         uses: actions/upload-artifact@v4
