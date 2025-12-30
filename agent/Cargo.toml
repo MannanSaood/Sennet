@@ -51,7 +51,7 @@ crossterm = "0.28"
 rand = "0.8"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-aya = { version = "0.12", features = ["async_tokio"] }
+aya = { version = "0.13", features = ["async_tokio"] }
 libc = "0.2"
 
 [dev-dependencies]
