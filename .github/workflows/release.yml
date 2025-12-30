@@ -53,8 +53,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y clang-19 llvm-19 llvm-19-dev libpolly-19-dev libelf-dev
-          # Install bpf-linker with matching LLVM version
-          cargo install bpf-linker --features llvm-19
+          # Install bpf-linker with matching LLVM version (disable defaults to avoid llvm-21 conflict)
+          cargo install bpf-linker --no-default-features --features llvm-19
           
       - name: Build eBPF
         run: |
