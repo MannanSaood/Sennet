@@ -38,36 +38,18 @@ jobs:
           name: backend
           path: dist/sennet-server-*
 
-  # Build the eBPF program (requires Linux)
+  # Use pre-built eBPF binary (built locally with matching toolchain)
+  # To rebuild: cargo +nightly build --target bpfel-unknown-none -Z build-std=core --release
   build-ebpf:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          # llvm-tools-preview required for rust-llvm feature
-          components: rust-src, llvm-tools-preview
           
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libelf-dev
-          # Use bpf-linker 0.9.14 which has simpler rust-llvm feature (no versioned LLVM complexity)
-          cargo install bpf-linker@0.9.14
-          
-      - name: Build eBPF
-        run: |
-          cd agent/sennet-ebpf
-          # Build without BTF for now to test base ELF structure
-          cargo +nightly build --target bpfel-unknown-none -Z build-std=core --release
-          
-      - name: Upload eBPF artifact
+      - name: Upload pre-built eBPF artifact
         uses: actions/upload-artifact@v4
         with:
           name: ebpf
-          path: agent/sennet-ebpf/target/bpfel-unknown-none/release/sennet-ebpf
+          path: agent/ebpf/sennet_ebpf.bin
 
   # Build the Rust agent for multiple architectures
   build-agent:
@@ -87,7 +69,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: ebpf
-          path: agent/sennet-ebpf/target/bpfel-unknown-none/release/
+          path: agent/ebpf/
           
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -103,14 +85,14 @@ jobs:
           set -x  # Print commands for debugging
           
           # Define source path for eBPF artifact
-          SOURCE="agent/sennet-ebpf/target/bpfel-unknown-none/release/sennet-ebpf"
+          SOURCE="agent/ebpf/sennet_ebpf.bin"
           
           # Verify the downloaded artifact exists
           echo "=== Verifying eBPF artifact ==="
           if [ ! -f "$SOURCE" ]; then
             echo "ERROR: eBPF artifact not found at $SOURCE"
             echo "Listing agent/sennet-ebpf/target/:"
-            ls -laR agent/sennet-ebpf/target/ || echo "Target dir does not exist"
+            ls -laR agent/ebpf/ || echo "eBPF dir does not exist"
             exit 1
           fi
           ls -la "$SOURCE"
