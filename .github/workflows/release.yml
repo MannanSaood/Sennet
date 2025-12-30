@@ -60,10 +60,8 @@ jobs:
       - name: Build eBPF
         run: |
           cd agent/sennet-ebpf
-          # Build with BTF (BPF Type Format) for aya 0.12+ compatibility
-          # -C debuginfo=2: Include debug info for BTF
-          # -C link-arg=--btf: Tell bpf-linker to generate BTF sections
-          RUSTFLAGS="-C debuginfo=2 -C link-arg=--btf" cargo +nightly build --target bpfel-unknown-none -Z build-std=core --release
+          # Build without BTF for now to test base ELF structure
+          cargo +nightly build --target bpfel-unknown-none -Z build-std=core --release
           
       - name: Upload eBPF artifact
         uses: actions/upload-artifact@v4
