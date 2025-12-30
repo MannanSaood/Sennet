@@ -54,8 +54,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libelf-dev
-          # Use rust-llvm-21 to use rustc's bundled LLVM (avoids version mismatch)
-          cargo install bpf-linker --no-default-features --features rust-llvm-21,rustc-build-sysroot
+          # Use bpf-linker 0.9.14 which has simpler rust-llvm feature (no versioned LLVM complexity)
+          cargo install bpf-linker@0.9.14
           
       - name: Build eBPF
         run: |
