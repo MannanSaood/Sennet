@@ -22,17 +22,22 @@ fn main() {
         let candidates = vec![
             // Environment variable path (can be absolute or relative)
             std::env::var("SENNET_EBPF_BINARY").unwrap_or_default(),
+            // Pre-built binary in agent/ebpf directory
+            manifest_path.join("ebpf").join("sennet_ebpf.bin").to_string_lossy().to_string(),
             // Relative to CARGO_MANIFEST_DIR (works locally and in cross)
             manifest_path.join("sennet_ebpf.bin").to_string_lossy().to_string(),
             manifest_path.join("src").join("sennet_ebpf.bin").to_string_lossy().to_string(),
             // Relative to CWD
             "sennet_ebpf.bin".to_string(),
             "src/sennet_ebpf.bin".to_string(),
+            "ebpf/sennet_ebpf.bin".to_string(),
             // Cross mounts project at /project, agent dir is /project/agent
             // These paths work inside the cross Docker container
+            "/project/agent/ebpf/sennet_ebpf.bin".to_string(),
             "/project/agent/sennet_ebpf.bin".to_string(),
             "/project/agent/src/sennet_ebpf.bin".to_string(),
             // Also check parent directory in case CWD is agent/
+            cwd.parent().map(|p| p.join("agent/ebpf/sennet_ebpf.bin").to_string_lossy().to_string()).unwrap_or_default(),
             cwd.parent().map(|p| p.join("agent/sennet_ebpf.bin").to_string_lossy().to_string()).unwrap_or_default(),
         ];
 
