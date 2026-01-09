@@ -2,9 +2,13 @@
 //!
 //! Automatically detects the default network interface for eBPF attachment.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::path::Path;
+
+#[cfg(target_os = "linux")]
 use std::fs;
+#[cfg(target_os = "linux")]
+use anyhow::Context;
 
 /// Information about a network interface
 #[derive(Debug, Clone)]

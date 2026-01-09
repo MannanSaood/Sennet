@@ -11,6 +11,14 @@ use crate::client::{Command, HeartbeatRequest, MetricsSummary, SentinelClient};
 use crate::config::Config;
 use crate::identity::IdentityManager;
 
+// Linux-only: imports for reading eBPF metrics from pinned maps
+#[cfg(target_os = "linux")]
+use crate::ebpf::PacketCounters;
+#[cfg(target_os = "linux")]
+use aya::maps::{Map, MapData, PerCpuArray};
+#[cfg(target_os = "linux")]
+use std::path::Path;
+
 /// Heartbeat loop that runs continuously
 pub struct HeartbeatLoop {
     config: Config,
@@ -80,16 +88,73 @@ impl HeartbeatLoop {
         .map_err(|e| anyhow::anyhow!("Heartbeat failed after retries: {}", e))
     }
 
-    /// Collect current metrics
+    /// Collect current metrics from eBPF maps (Linux) or return zeros (other platforms)
     fn collect_metrics(&self) -> MetricsSummary {
+        let uptime = self.start_time.elapsed().as_secs();
+        
+        #[cfg(target_os = "linux")]
+        {
+            // Try to read from pinned eBPF maps
+            match Self::read_ebpf_counters() {
+                Ok(counters) => {
+                    return MetricsSummary {
+                        rx_packets: counters.rx_packets,
+                        rx_bytes: counters.rx_bytes,
+                        tx_packets: counters.tx_packets,
+                        tx_bytes: counters.tx_bytes,
+                        drop_count: counters.drop_count,
+                        uptime_seconds: uptime,
+                    };
+                }
+                Err(e) => {
+                    debug!("Could not read eBPF counters: {}", e);
+                }
+            }
+        }
+        
+        // Fallback: return zeros (eBPF not available or not Linux)
         MetricsSummary {
-            rx_packets: 0, // TODO: Implement eBPF metrics
+            rx_packets: 0,
             rx_bytes: 0,
             tx_packets: 0,
             tx_bytes: 0,
             drop_count: 0,
-            uptime_seconds: self.start_time.elapsed().as_secs(),
+            uptime_seconds: uptime,
         }
+    }
+    
+    /// Read packet counters from pinned eBPF maps (Linux only)
+    #[cfg(target_os = "linux")]
+    fn read_ebpf_counters() -> Result<PacketCounters> {
+        let pin_path = Path::new("/sys/fs/bpf/sennet/counters");
+        if !pin_path.exists() {
+            anyhow::bail!("Pinned map not found");
+        }
+        
+        let map_data = MapData::from_pin(pin_path)?;
+        let map = Map::PerCpuArray(map_data);
+        let counters: PerCpuArray<_, PacketCounters> = map.try_into()?;
+        
+        let mut total = PacketCounters::default();
+        
+        // Read ingress counters (index 0)
+        if let Ok(values) = counters.get(&0, 0) {
+            for cpu_val in values.iter() {
+                total.rx_packets += cpu_val.rx_packets;
+                total.rx_bytes += cpu_val.rx_bytes;
+                total.drop_count += cpu_val.drop_count;
+            }
+        }
+        
+        // Read egress counters (index 1)
+        if let Ok(values) = counters.get(&1, 0) {
+            for cpu_val in values.iter() {
+                total.tx_packets += cpu_val.tx_packets;
+                total.tx_bytes += cpu_val.tx_bytes;
+            }
+        }
+        
+        Ok(total)
     }
 
     /// Handle commands from the server

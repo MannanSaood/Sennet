@@ -126,7 +126,8 @@ async fn main() -> Result<()> {
         }
     };
 
-    // Discover network interface
+    // Discover network interface (used by eBPF on Linux)
+    #[allow(unused_variables)] // Used only on Linux for eBPF attachment
     let interface = match interface::discover_default_interface(config.interface.as_deref()) {
         Ok(iface) => {
             info!("Network interface: {}", iface);

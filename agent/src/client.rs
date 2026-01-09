@@ -53,7 +53,9 @@ pub struct HeartbeatResponse {
     pub command: Command,
     #[serde(default)]
     pub latest_version: String,
+    /// Config hash for change detection (Phase 10: model updates)
     #[serde(default)]
+    #[allow(dead_code)]
     pub config_hash: String,
 }
 

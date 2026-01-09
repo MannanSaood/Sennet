@@ -3,6 +3,7 @@
 //! Handles downloading new versions, verifying checksums, and atomic binary replacement.
 
 use anyhow::{anyhow, Context, Result};
+use sha2::{Sha256, Digest};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -252,28 +253,12 @@ pub fn needs_upgrade(current: &str, latest: &str) -> bool {
     lat.len() > curr.len()
 }
 
-/// Calculate SHA256 hex digest
+/// Calculate SHA256 hex digest (cross-platform, no external dependencies)
 fn sha256_hex(data: &[u8]) -> String {
-    // Simple SHA256 implementation using system command (fallback)
-    // In production, use the `sha2` crate
-    let temp = std::env::temp_dir().join(format!("sennet_checksum_{}", std::process::id()));
-    if fs::write(&temp, data).is_ok() {
-        if let Ok(output) = Command::new("sha256sum")
-            .arg(&temp)
-            .output()
-        {
-            let _ = fs::remove_file(&temp);
-            if let Ok(stdout) = String::from_utf8(output.stdout) {
-                if let Some(hash) = stdout.split_whitespace().next() {
-                    return hash.to_string();
-                }
-            }
-        }
-        let _ = fs::remove_file(&temp);
-    }
-
-    // Fallback: return empty (will fail verification)
-    String::new()
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    let result = hasher.finalize();
+    hex::encode(result)
 }
 
 #[cfg(test)]

@@ -50,12 +50,13 @@ trait DataProvider {
 use aya::maps::{Map, MapData, PerCpuArray, RingBuf};
 
 #[cfg(target_os = "linux")]
-use crate::ebpf::{PacketCounters, DropEvent, drop_reason_str};
+use crate::ebpf::{PacketCounters, DropEvent, NetfilterEvent, drop_reason_str, nf_hook_str, nf_verdict_str};
 
 #[cfg(target_os = "linux")]
 struct RealDataProvider {
     counters: PerCpuArray<MapData, PacketCounters>,
     drop_events_rb: Option<RingBuf<MapData>>,
+    nf_events_rb: Option<RingBuf<MapData>>,  // Phase 6.2: Netfilter events
     // Track last values to show delta/rates
     last_counters: PacketCounters,
     start_time: Instant,
@@ -95,9 +96,29 @@ impl RealDataProvider {
             }
         };
         
+        // Try to open NF_EVENTS RingBuf (Phase 6.2)
+        let nf_events_rb = {
+            let nf_path = Path::new("/sys/fs/bpf/sennet/nf_events");
+            if nf_path.exists() {
+                match MapData::from_pin(nf_path) {
+                    Ok(data) => {
+                        let map = Map::RingBuf(data);
+                        match map.try_into() {
+                            Ok(rb) => Some(rb),
+                            Err(_) => None,
+                        }
+                    }
+                    Err(_) => None,
+                }
+            } else {
+                None
+            }
+        };
+        
         Ok(Self { 
             counters,
             drop_events_rb,
+            nf_events_rb,
             last_counters: PacketCounters::default(),
             start_time: Instant::now(),
         })
@@ -127,15 +148,14 @@ impl RealDataProvider {
     }
     
     fn poll_drop_events(&mut self, state: &mut AppState) {
+        // Poll kfree_skb drop events (Phase 6.1)
         if let Some(ref mut rb) = self.drop_events_rb {
-            // Poll RingBuf for new events (non-blocking)
             while let Some(item) = rb.next() {
                 if item.len() >= std::mem::size_of::<DropEvent>() {
                     let event: DropEvent = unsafe {
                         std::ptr::read_unaligned(item.as_ptr() as *const DropEvent)
                     };
                     
-                    // Convert to display format
                     let elapsed_secs = self.start_time.elapsed().as_secs();
                     let reason_str = drop_reason_str(event.reason);
                     
@@ -157,6 +177,36 @@ impl RealDataProvider {
                     state.drop_events.insert(0, display);
                     if state.drop_events.len() > 20 {
                         state.drop_events.pop();
+                    }
+                }
+            }
+        }
+        
+        // Poll netfilter events (Phase 6.2)
+        if let Some(ref mut rb) = self.nf_events_rb {
+            while let Some(item) = rb.next() {
+                if item.len() >= std::mem::size_of::<NetfilterEvent>() {
+                    let event: NetfilterEvent = unsafe {
+                        std::ptr::read_unaligned(item.as_ptr() as *const NetfilterEvent)
+                    };
+                    
+                    // Only show DROP verdicts (verdict == 0)
+                    if event.verdict == 0 {
+                        let elapsed_secs = self.start_time.elapsed().as_secs();
+                        let hook_name = nf_hook_str(event.hook);
+                        let verdict_name = nf_verdict_str(event.verdict);
+                        
+                        let display = DropEventDisplay {
+                            timestamp_secs: elapsed_secs,
+                            reason: format!("NF_{}", verdict_name),
+                            hook: Some(hook_name.to_string()),
+                            severity: DropSeverity::Security, // Netfilter drops are security-relevant
+                        };
+                        
+                        state.drop_events.insert(0, display);
+                        if state.drop_events.len() > 20 {
+                            state.drop_events.pop();
+                        }
                     }
                 }
             }

@@ -185,6 +185,7 @@ heartbeat_interval_secs: 30
 }
 
 /// Print help text for the init command
+#[allow(dead_code)] // Reserved for `sennet init --help`
 pub fn print_help() {
     println!("Initialize Sennet agent configuration");
     println!();

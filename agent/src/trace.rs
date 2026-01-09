@@ -143,30 +143,47 @@ pub fn run(args: &[String]) -> Result<()> {
 fn run_linux_trace(filter: &TraceFilter) -> Result<()> {
     use std::path::Path;
     use aya::maps::{Map, MapData, RingBuf};
-    use crate::ebpf::{DropEvent, drop_reason_str};
+    use crate::ebpf::{DropEvent, NetfilterEvent, drop_reason_str, nf_hook_str, nf_verdict_str};
     
     let drop_path = Path::new("/sys/fs/bpf/sennet/drop_events");
+    let nf_path = Path::new("/sys/fs/bpf/sennet/nf_events");
     
-    if !drop_path.exists() {
+    if !drop_path.exists() && !nf_path.exists() {
         println!("{}: Pinned maps not found. Is the agent running?", "Warning".yellow());
         println!("Run '{}' first, then use trace.", "sudo sennet".cyan());
         return Ok(());
     }
     
-    // Open DROP_EVENTS RingBuf
-    let drop_rb: Option<RingBuf<MapData>> = match MapData::from_pin(drop_path) {
-        Ok(data) => {
-            let map = Map::RingBuf(data);
-            map.try_into().ok()
+    // Open DROP_EVENTS RingBuf (Phase 6.1)
+    let mut drop_rb: Option<RingBuf<MapData>> = if drop_path.exists() {
+        match MapData::from_pin(drop_path) {
+            Ok(data) => {
+                let map = Map::RingBuf(data);
+                map.try_into().ok()
+            }
+            Err(_) => None,
         }
-        Err(_) => None,
+    } else {
+        None
     };
     
-    if drop_rb.is_none() {
-        println!("{}: Could not open drop_events map", "Warning".yellow());
+    // Open NF_EVENTS RingBuf (Phase 6.2)
+    let mut nf_rb: Option<RingBuf<MapData>> = if nf_path.exists() {
+        match MapData::from_pin(nf_path) {
+            Ok(data) => {
+                let map = Map::RingBuf(data);
+                map.try_into().ok()
+            }
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+    
+    if drop_rb.is_none() && nf_rb.is_none() {
+        println!("{}: Could not open any event maps", "Warning".yellow());
     }
     
-    let mut drop_rb = drop_rb;
     let start = Instant::now();
     let timeout = Duration::from_secs(filter.timeout_secs);
     let mut event_count = 0;
@@ -188,13 +205,26 @@ fn run_linux_trace(filter: &TraceFilter) -> Result<()> {
             break;
         }
         
-        // Poll DROP_EVENTS
+        // Poll DROP_EVENTS (Phase 6.1)
         if let Some(ref mut rb) = drop_rb {
             while let Some(item) = rb.next() {
                 if item.len() >= std::mem::size_of::<DropEvent>() {
                     let event: DropEvent = unsafe {
                         std::ptr::read_unaligned(item.as_ptr() as *const DropEvent)
                     };
+                    
+                    // Apply protocol filter (Phase 6.4)
+                    if let Some(ref proto_filter) = filter.protocol {
+                        let event_proto = match event.protocol {
+                            6 => "tcp",
+                            17 => "udp",
+                            1 => "icmp",
+                            _ => "",
+                        };
+                        if event_proto != proto_filter.as_str() {
+                            continue; // Skip non-matching events
+                        }
+                    }
                     
                     let reason = drop_reason_str(event.reason);
                     let elapsed = start.elapsed().as_secs_f64();
@@ -216,8 +246,48 @@ fn run_linux_trace(filter: &TraceFilter) -> Result<()> {
                     println!("{:>7.2}s  {:15}  {:10}  proto={}",
                              elapsed,
                              reason_colored,
-                             "".white(),
+                             "-".white(),
                              proto);
+                    
+                    event_count += 1;
+                    if event_count >= filter.count {
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // Poll NF_EVENTS (Phase 6.2)
+        if let Some(ref mut rb) = nf_rb {
+            while let Some(item) = rb.next() {
+                if item.len() >= std::mem::size_of::<NetfilterEvent>() {
+                    let event: NetfilterEvent = unsafe {
+                        std::ptr::read_unaligned(item.as_ptr() as *const NetfilterEvent)
+                    };
+                    
+                    // Only show DROP verdicts by default
+                    if event.verdict != 0 {
+                        continue;
+                    }
+                    
+                    let elapsed = start.elapsed().as_secs_f64();
+                    let hook_name = nf_hook_str(event.hook);
+                    let verdict_name = nf_verdict_str(event.verdict);
+                    
+                    let reason = format!("NF_{}", verdict_name);
+                    let pf = match event.pf {
+                        2 => "IPv4",
+                        10 => "IPv6",
+                        _ => "?",
+                    };
+                    
+                    println!("{:>7.2}s  {:15}  {:10}  pf={} ifin={} ifout={}",
+                             elapsed,
+                             reason.red(),
+                             hook_name.cyan(),
+                             pf,
+                             event.ifindex_in,
+                             event.ifindex_out);
                     
                     event_count += 1;
                     if event_count >= filter.count {

@@ -6,7 +6,7 @@
 
 /// Packet statistics counters
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 pub struct PacketCounters {
     /// Total received packets
     pub rx_packets: u64,
@@ -104,7 +104,7 @@ pub mod drop_reason {
 
 /// Event for packet drops (captured from kfree_skb tracepoint)
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 pub struct DropEvent {
     /// Kernel timestamp in nanoseconds
     pub timestamp_ns: u64,
@@ -185,7 +185,7 @@ pub mod nf_verdict {
 
 /// Event for netfilter hook processing (Phase 6.2)
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 pub struct NetfilterEvent {
     /// Kernel timestamp in nanoseconds
     pub timestamp_ns: u64,
