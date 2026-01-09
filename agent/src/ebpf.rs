@@ -124,7 +124,7 @@ impl EbpfManager {
         let ebpf_bytes: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sennet_ebpf.bin"));
         
         #[cfg(not(feature = "embed_bpf"))]
-        let ebpf_bytes: &[u8] = include_bytes!("../../sennet-ebpf/target/bpfel-unknown-none/release/sennet-ebpf");
+        let ebpf_bytes: &[u8] = include_bytes!("../sennet-ebpf/target/bpfel-unknown-none/release/sennet-ebpf");
         
         // Debug: Log embedded binary info
         tracing::info!("eBPF binary size: {} bytes", ebpf_bytes.len());

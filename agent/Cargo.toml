@@ -38,6 +38,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 anyhow = "1"
 thiserror = "1"
 
+# Shared eBPF types
+sennet-common = { path = "sennet-common" }
+
 # Time handling
 chrono = { version = "0.4", features = ["serde"] }
 
