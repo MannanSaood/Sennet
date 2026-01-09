@@ -38,14 +38,50 @@ jobs:
           name: backend
           path: dist/sennet-server-*
 
-  # Use pre-built eBPF binary (built locally with matching toolchain)
-  # To rebuild: cargo +nightly build --target bpfel-unknown-none -Z build-std=core --release
+  # Build eBPF binary fresh with LLVM 18 for aya 0.13 compatibility
+  # LLVM 14 produces ELF headers that cause "Invalid ELF header size or alignment" errors
   build-ebpf:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # Use latest Ubuntu for LLVM 18+
     steps:
       - uses: actions/checkout@v4
+      
+      - name: Install LLVM 18 and build dependencies
+        run: |
+          # Ubuntu 24.04 has LLVM 18 in repos
+          sudo apt-get update
+          sudo apt-get install -y llvm-18 lld-18 clang-18 libelf-dev
           
-      - name: Upload pre-built eBPF artifact
+          # Set LLVM 18 as default
+          sudo update-alternatives --install /usr/bin/llvm-config llvm-config /usr/bin/llvm-config-18 100
+          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-18 100
+          sudo update-alternatives --install /usr/bin/lld lld /usr/bin/lld-18 100
+          
+          # Verify versions
+          llvm-config --version
+          clang --version
+          
+      - name: Install Rust nightly with BPF target
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+          
+      - name: Install bpf-linker
+        run: cargo install bpf-linker
+        
+      - name: Build eBPF program
+        run: |
+          cd agent/sennet-ebpf
+          cargo +nightly build --target bpfel-unknown-none -Z build-std=core --release
+          
+          # Verify the binary
+          file target/bpfel-unknown-none/release/sennet-ebpf
+          ls -la target/bpfel-unknown-none/release/sennet-ebpf
+          
+          # Copy to expected location
+          mkdir -p ../ebpf
+          cp target/bpfel-unknown-none/release/sennet-ebpf ../ebpf/sennet_ebpf.bin
+          
+      - name: Upload eBPF artifact
         uses: actions/upload-artifact@v4
         with:
           name: ebpf
