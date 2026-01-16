@@ -14,6 +14,7 @@ mod status;
 mod tui;
 mod init;
 mod trace;
+mod k8s;
 
 use anyhow::Result;
 use tracing::{info, error, warn};
@@ -88,6 +89,16 @@ async fn main() -> Result<()> {
                     trace::print_help();
                 } else {
                     trace::run(&trace_args)?;
+                }
+                return Ok(());
+            }
+            "diagnose" => {
+                // Kubernetes connectivity diagnosis (Phase 7.4)
+                let diag_args: Vec<String> = args[2..].to_vec();
+                if diag_args.iter().any(|a| a == "--help" || a == "-h") {
+                    print_diagnose_help();
+                } else {
+                    run_diagnose(&diag_args).await?;
                 }
                 return Ok(());
             }
@@ -208,6 +219,7 @@ fn print_help() {
     println!("    {}      Display agent status and connection info", "status".cyan());
     println!("    {}         Live traffic monitoring dashboard", "top".cyan());
     println!("    {}       One-shot packet tracing", "trace".cyan());
+    println!("    {}    K8s pod connectivity diagnosis", "diagnose".cyan());
     println!("    {}     Check for and install updates", "upgrade".cyan());
     println!("    {}     Print version information", "version".cyan());
     println!("    {}        Show this help message", "help".cyan());
@@ -249,4 +261,132 @@ async fn shutdown_signal() {
         _ = ctrl_c => {},
         _ = terminate => {},
     }
+}
+
+// =============================================================================
+// Diagnose Command (Phase 7.4)
+// =============================================================================
+
+fn print_diagnose_help() {
+    println!("{}", "Sennet Diagnose - Kubernetes Connectivity Diagnosis".bold());
+    println!("Check connectivity between two pods and detect blocking NetworkPolicies");
+    println!();
+    println!("{}", "USAGE:".yellow());
+    println!("    sennet diagnose <SOURCE_POD> <TARGET_POD> [OPTIONS]");
+    println!();
+    println!("{}", "OPTIONS:".yellow());
+    println!("    -n, --namespace <NS>   Namespace (default: default)");
+    println!("    -h, --help             Show this help message");
+    println!();
+    println!("{}", "EXAMPLES:".yellow());
+    println!("    sennet diagnose frontend backend");
+    println!("    sennet diagnose frontend backend -n production");
+    println!("    sennet diagnose web-abc123 api-def456 --namespace staging");
+    println!();
+    println!("{}", "OUTPUT:".yellow());
+    println!("    - Source and target pod details");
+    println!("    - NetworkPolicies affecting each pod");
+    println!("    - Connectivity status (ALLOWED / BLOCKED / UNKNOWN)");
+    println!("    - Recommendations for troubleshooting");
+    println!();
+    println!("{}", "NOTES:".yellow());
+    println!("    - Must be run from within a Kubernetes cluster");
+    println!("    - Requires RBAC permissions to list pods and NetworkPolicies");
+    println!("    - Works with standard K8s NetworkPolicy, Calico, and Cilium");
+}
+
+async fn run_diagnose(args: &[String]) -> Result<()> {
+    // Parse arguments
+    let mut source_pod: Option<String> = None;
+    let mut target_pod: Option<String> = None;
+    let mut namespace: Option<String> = None;
+    
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+        match arg.as_str() {
+            "-n" | "--namespace" => {
+                if i + 1 < args.len() {
+                    namespace = Some(args[i + 1].clone());
+                    i += 1;
+                } else {
+                    eprintln!("{} --namespace requires a value", "Error:".red());
+                    std::process::exit(1);
+                }
+            }
+            _ if !arg.starts_with('-') => {
+                if source_pod.is_none() {
+                    source_pod = Some(arg.clone());
+                } else if target_pod.is_none() {
+                    target_pod = Some(arg.clone());
+                }
+            }
+            _ => {
+                eprintln!("{} Unknown option: {}", "Error:".red(), arg);
+                std::process::exit(1);
+            }
+        }
+        i += 1;
+    }
+    
+    // Validate required arguments
+    let source = match source_pod {
+        Some(s) => s,
+        None => {
+            eprintln!("{} Source pod name required", "Error:".red());
+            eprintln!("Usage: sennet diagnose <SOURCE_POD> <TARGET_POD>");
+            std::process::exit(1);
+        }
+    };
+    
+    let target = match target_pod {
+        Some(t) => t,
+        None => {
+            eprintln!("{} Target pod name required", "Error:".red());
+            eprintln!("Usage: sennet diagnose <SOURCE_POD> <TARGET_POD>");
+            std::process::exit(1);
+        }
+    };
+    
+    info!("Diagnosing connectivity: {} -> {}", source, target);
+    
+    // Initialize K8s manager
+    let k8s_manager = match k8s::K8sManager::new().await {
+        Ok(mgr) => mgr,
+        Err(e) => {
+            eprintln!("{} Failed to initialize Kubernetes client: {}", "Error:".red(), e);
+            std::process::exit(1);
+        }
+    };
+    
+    // Check if in cluster
+    if !k8s_manager.is_in_cluster() {
+        eprintln!("{} Not running inside a Kubernetes cluster", "Warning:".yellow());
+        eprintln!("The diagnose command requires access to the Kubernetes API.");
+        eprintln!();
+        eprintln!("To use this command:");
+        eprintln!("  1. Run sennet inside a Kubernetes pod with appropriate RBAC");
+        eprintln!("  2. Or configure kubectl and set KUBECONFIG environment variable");
+    }
+    
+    // Start sync to populate caches
+    if let Err(e) = k8s_manager.start_sync().await {
+        warn!("Failed to start K8s sync: {}", e);
+    }
+    
+    // Give time for initial cache population
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    
+    // Run diagnosis
+    match k8s_manager.diagnose_connectivity(&source, &target, namespace.as_deref()).await {
+        Ok(result) => {
+            println!("{}", result.format_output());
+        }
+        Err(e) => {
+            eprintln!("{} Diagnosis failed: {}", "Error:".red(), e);
+            std::process::exit(1);
+        }
+    }
+    
+    Ok(())
 }

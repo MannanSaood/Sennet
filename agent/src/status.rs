@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::process::Command;
+use std::path::Path;
 use colored::*;
 
 pub fn run() -> Result<()> {
@@ -41,8 +42,66 @@ pub fn run() -> Result<()> {
 
     // 5. eBPF Mode
     println!("eBPF Mode:    {}", "TC (Traffic Control)".cyan());
+    
+    // 6. Kubernetes Context (Phase 7)
+    let k8s_info = check_kubernetes_context();
+    println!();
+    println!("{}", "Kubernetes:".bold());
+    println!("  In-cluster: {}", if k8s_info.in_cluster { "Yes".green() } else { "No".dimmed() });
+    println!("  CNI:        {}", k8s_info.cni_type.cyan());
 
     Ok(())
+}
+
+struct K8sInfo {
+    in_cluster: bool,
+    cni_type: String,
+}
+
+fn check_kubernetes_context() -> K8sInfo {
+    // Check if running inside a Kubernetes cluster
+    let in_cluster = Path::new("/var/run/secrets/kubernetes.io/serviceaccount/token").exists();
+    
+    // Detect CNI type
+    let cni_type = detect_cni_type();
+    
+    K8sInfo {
+        in_cluster,
+        cni_type,
+    }
+}
+
+fn detect_cni_type() -> String {
+    let cni_config_dir = Path::new("/etc/cni/net.d");
+    
+    if !cni_config_dir.exists() {
+        return "Not detected".to_string();
+    }
+    
+    // Read CNI config files and look for hints
+    if let Ok(entries) = std::fs::read_dir(cni_config_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                let name_lower = name.to_lowercase();
+                
+                if name_lower.contains("calico") { return "Calico".to_string(); }
+                if name_lower.contains("cilium") { return "Cilium".to_string(); }
+                if name_lower.contains("flannel") { return "Flannel".to_string(); }
+                if name_lower.contains("weave") { return "Weave Net".to_string(); }
+                if name_lower.contains("kindnet") { return "kindnet".to_string(); }
+                if name_lower.contains("aws") { return "AWS VPC CNI".to_string(); }
+                if name_lower.contains("azure") { return "Azure CNI".to_string(); }
+            }
+        }
+    }
+    
+    // Check for CNI-specific paths
+    if Path::new("/sys/fs/bpf/cilium").exists() {
+        return "Cilium".to_string();
+    }
+    
+    "Generic".to_string()
 }
 
 fn check_service_status() -> String {

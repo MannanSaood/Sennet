@@ -143,7 +143,7 @@ pub fn run(args: &[String]) -> Result<()> {
 fn run_linux_trace(filter: &TraceFilter) -> Result<()> {
     use std::path::Path;
     use aya::maps::{Map, MapData, RingBuf};
-    use crate::ebpf::{DropEvent, NetfilterEvent, drop_reason_str, nf_hook_str, nf_verdict_str};
+    use crate::ebpf::{DropEvent, NetfilterEvent, drop_reason_str, eth_proto_str, nf_hook_str, nf_verdict_str};
     
     let drop_path = Path::new("/sys/fs/bpf/sennet/drop_events");
     let nf_path = Path::new("/sys/fs/bpf/sennet/nf_events");
@@ -159,11 +159,21 @@ fn run_linux_trace(filter: &TraceFilter) -> Result<()> {
         match MapData::from_pin(drop_path) {
             Ok(data) => {
                 let map = Map::RingBuf(data);
-                map.try_into().ok()
+                match map.try_into() {
+                    Ok(rb) => Some(rb),
+                    Err(e) => {
+                        eprintln!("{}: Failed to convert drop_events to RingBuf: {:?}", "Debug".blue(), e);
+                        None
+                    }
+                }
             }
-            Err(_) => None,
+            Err(e) => {
+                eprintln!("{}: Failed to open drop_events from pin: {:?}", "Debug".blue(), e);
+                None
+            }
         }
     } else {
+        eprintln!("{}: drop_events path does not exist", "Debug".blue());
         None
     };
     
@@ -172,16 +182,26 @@ fn run_linux_trace(filter: &TraceFilter) -> Result<()> {
         match MapData::from_pin(nf_path) {
             Ok(data) => {
                 let map = Map::RingBuf(data);
-                map.try_into().ok()
+                match map.try_into() {
+                    Ok(rb) => Some(rb),
+                    Err(e) => {
+                        eprintln!("{}: Failed to convert nf_events to RingBuf: {:?}", "Debug".blue(), e);
+                        None
+                    }
+                }
             }
-            Err(_) => None,
+            Err(e) => {
+                eprintln!("{}: Failed to open nf_events from pin: {:?}", "Debug".blue(), e);
+                None
+            }
         }
     } else {
+        eprintln!("{}: nf_events path does not exist", "Debug".blue());
         None
     };
     
     if drop_rb.is_none() && nf_rb.is_none() {
-        println!("{}: Could not open any event maps", "Warning".yellow());
+        println!("{}: Could not open any event maps (see debug messages above)", "Warning".yellow());
     }
     
     let start = Instant::now();
@@ -208,20 +228,33 @@ fn run_linux_trace(filter: &TraceFilter) -> Result<()> {
         // Poll DROP_EVENTS (Phase 6.1)
         if let Some(ref mut rb) = drop_rb {
             while let Some(item) = rb.next() {
+                // Debug: show raw event data
+                if std::env::var("SENNET_DEBUG").is_ok() {
+                    eprintln!("Raw event bytes (len={}): {:02x?}", item.len(), &item[..item.len().min(24)]);
+                }
+                
                 if item.len() >= std::mem::size_of::<DropEvent>() {
                     let event: DropEvent = unsafe {
                         std::ptr::read_unaligned(item.as_ptr() as *const DropEvent)
                     };
                     
+                    // Debug: show parsed values
+                    if std::env::var("SENNET_DEBUG").is_ok() {
+                        eprintln!("Parsed: ts={}, reason={}, ifindex={}, proto={}, pad={}",
+                            event.timestamp_ns, event.reason, event.ifindex, event.protocol, event._pad);
+                    }
+                    
                     // Apply protocol filter (Phase 6.4)
+                    // Note: kfree_skb protocol is ETH_P_* (Ethernet), not IP protocol
+                    // For now, filter by IP version: "ipv4", "ipv6", or skip filter for TCP/UDP/ICMP
                     if let Some(ref proto_filter) = filter.protocol {
-                        let event_proto = match event.protocol {
-                            6 => "tcp",
-                            17 => "udp",
-                            1 => "icmp",
-                            _ => "",
+                        let matches = match proto_filter.as_str() {
+                            "ipv4" => event.protocol == 0x0800,
+                            "ipv6" => event.protocol == 0x86DD,
+                            // TCP/UDP/ICMP filters don't apply to kfree_skb (no L4 info)
+                            _ => true, // Show all for unsupported filters
                         };
-                        if event_proto != proto_filter.as_str() {
+                        if !matches {
                             continue; // Skip non-matching events
                         }
                     }
@@ -236,14 +269,15 @@ fn run_linux_trace(filter: &TraceFilter) -> Result<()> {
                         _ => reason.white(),
                     };
                     
-                    let proto = match event.protocol {
-                        6 => "TCP",
-                        17 => "UDP",
-                        1 => "ICMP",
-                        _ => "?",
-                    };
+                    // Protocol from kfree_skb is Ethernet protocol (ETH_P_*)
+                    let proto = eth_proto_str(event.protocol);
                     
-                    println!("{:>7.2}s  {:15}  {:10}  proto={}",
+                    // Skip events with no valid data (stale/uninitialized)
+                    if event.timestamp_ns == 0 && event.reason == 0 && event.protocol == 0 {
+                        continue; // Skip empty/stale events
+                    }
+                    
+                    println!("{:>7.2}s  {:15}  {:10}  eth={}",
                              elapsed,
                              reason_colored,
                              "-".white(),

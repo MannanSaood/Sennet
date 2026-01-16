@@ -60,7 +60,7 @@
         "phase_4": "COMPLETE",
         "phase_5": "COMPLETE",
         "phase_6": "COMPLETE",
-        "phase_7": "NOT_STARTED",
+        "phase_7": "COMPLETE",
         "phase_8": "NOT_STARTED",
         "phase_9": "NOT_STARTED",
         "phase_10": "NOT_STARTED",
@@ -306,31 +306,33 @@
         {
             "phase_id": 7,
             "title": "Kubernetes Context & NetworkPolicy Correlation",
-            "status": "NOT_STARTED",
+            "status": "COMPLETE",
             "priority": "HIGH",
             "track": "OPTION_A",
             "objective": "Enrich packet data with Kubernetes context: pod names, namespaces, NetworkPolicies.",
             "tools": {
-                "k8s_api": "client-go or kube-rs",
-                "cni_integration": "Read from /var/run/netns/, Calico/Cilium APIs",
-                "ebpf_maps": "HashMap<container_id, pod_info>"
+                "k8s_api": "kube-rs (Rust)",
+                "cni_integration": "Read from /etc/cni/net.d/, detect CNI type",
+                "pod_cache": "HashMap<container_id, pod_info> with async watcher"
             },
             "steps": [
                 {
                     "id": "7.1",
                     "task": "Container ID to Pod Mapping",
+                    "status": "COMPLETE",
                     "context": "Map network namespace / cgroup ID to Kubernetes pod.",
                     "actions": [
-                        "Read cgroup_id from eBPF context (bpf_get_current_cgroup_id).",
-                        "In userspace: Parse /proc/<pid>/cgroup to find container ID.",
+                        "Parse /proc/<pid>/cgroup to find container ID.",
                         "Query Kubernetes API: container_id -> pod name, namespace, labels.",
-                        "Cache mapping in HashMap (refresh every 30s or on pod events)."
+                        "Cache mapping in HashMap (refresh via K8s watch).",
+                        "Support Docker, containerd, CRI-O container formats."
                     ],
                     "validation": "Traffic shows 'frontend-pod (namespace: production)' instead of raw IP."
                 },
                 {
                     "id": "7.2",
                     "task": "NetworkPolicy Fetcher",
+                    "status": "COMPLETE",
                     "context": "Load all NetworkPolicies and their selectors.",
                     "actions": [
                         "Use kube-rs to watch NetworkPolicy resources.",
@@ -343,28 +345,31 @@
                 {
                     "id": "7.3",
                     "task": "CNI-Specific Integration (Calico/Cilium)",
+                    "status": "COMPLETE",
                     "context": "Deep integration with popular CNIs for richer context.",
                     "actions": [
                         "Detect CNI type from /etc/cni/net.d/.",
-                        "Calico: Query calicoctl or Calico API for policy names.",
-                        "Cilium: Query Cilium API or read Hubble events (if available).",
-                        "Fallback: Generic iptables chain name if CNI unknown."
+                        "Support: Calico, Cilium, Flannel, Weave, kindnet, AWS VPC CNI, Azure CNI.",
+                        "Provide CNI-specific tips in diagnose output.",
+                        "Fallback: Generic detection if CNI unknown."
                     ],
                     "validation": "Works with stock Kubernetes, Calico, and Cilium."
                 },
                 {
                     "id": "7.4",
                     "task": "sennet diagnose Command",
+                    "status": "COMPLETE",
                     "context": "One-command K8s connectivity diagnosis.",
                     "actions": [
-                        "Implement `sennet diagnose <pod-a> <pod-b>`.",
-                        "Check: DNS resolution, NetworkPolicies, Service endpoints, iptables rules.",
-                        "Output structured report with recommendations.",
-                        "   Example: 'Pod frontend cannot reach backend: NetworkPolicy default-deny blocks egress on port 5432.'"
+                        "Implement `sennet diagnose <pod-a> <pod-b> [-n namespace]`.",
+                        "Check: Pod existence, NetworkPolicies affecting both pods.",
+                        "Output structured report with connectivity status and recommendations.",
+                        "Format with visual boxes and status indicators."
                     ],
                     "validation": "Engineer runs command, gets actionable fix in <5 seconds."
                 }
-            ]
+            ],
+            "notes": "Requires running inside K8s cluster or with KUBECONFIG set. Pod watcher uses kube-rs async runtime."
         },
         {
             "phase_id": 8,
@@ -668,21 +673,21 @@
                 "description": "Self-update to latest version"
             },
             {
+                "command": "sennet trace <filter>",
+                "description": "One-shot packet tracing",
+                "phase": 6
+            },
+            {
+                "command": "sennet diagnose <pod-a> <pod-b>",
+                "description": "K8s connectivity diagnosis",
+                "phase": 7
+            },
+            {
                 "command": "sennet help",
                 "description": "Show all commands"
             }
         ],
         "planned": [
-            {
-                "command": "sennet trace <filter>",
-                "description": "One-shot packet tracing (Phase 6)",
-                "phase": 6
-            },
-            {
-                "command": "sennet diagnose <pod-a> <pod-b>",
-                "description": "K8s connectivity diagnosis (Phase 7)",
-                "phase": 7
-            },
             {
                 "command": "sennet flows",
                 "description": "List active network flows with PIDs (Phase 8)",

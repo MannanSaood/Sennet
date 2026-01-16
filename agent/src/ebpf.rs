@@ -46,6 +46,7 @@ unsafe impl aya::Pod for DropEvent {}
 #[allow(dead_code)] // Used on Linux
 pub fn drop_reason_str(reason: u32) -> &'static str {
     match reason {
+        0 => "NO_REASON",       // Kernel doesn't support drop reasons or couldn't read
         1 => "NOT_SPECIFIED",
         2 => "NO_SOCKET",
         3 => "PKT_TOO_SMALL",
@@ -75,6 +76,18 @@ pub fn drop_reason_str(reason: u32) -> &'static str {
         42 => "NEIGH_QUEUEFULL",
         44 => "TC_EGRESS",
         _ => "UNKNOWN",
+    }
+}
+
+/// Human-readable Ethernet protocol string
+#[allow(dead_code)] // Used on Linux
+pub fn eth_proto_str(proto: u16) -> &'static str {
+    match proto {
+        0x0800 => "IPv4",
+        0x86DD => "IPv6",
+        0x0806 => "ARP",
+        0x8100 => "VLAN",
+        _ => "OTHER",
     }
 }
 
