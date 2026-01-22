@@ -1,3 +1,9 @@
+<div align="center">
+  <img src="https://capsule-render.vercel.app/api?type=waving&color=auto&height=250&section=header&text=Sennet&fontSize=80&animation=fadeIn&fontAlignY=35&desc=Deep%20Network%20Observability%20and%20Cloud%20Cost%20Intelligence&descAlignY=55&descAlign=50" alt="Sennet Header" />
+</div>
+
+---
+
 # Sennet (Sentinel Network)
 
 ![Build Status](https://img.shields.io/github/actions/workflow/status/MannanSaood/Sennet/release.yml?style=flat-square)
@@ -5,6 +11,8 @@
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 ![Version](https://img.shields.io/github/v/release/MannanSaood/Sennet?style=flat-square)
 
+
+--- 
 **Sennet** is a lightweight, eBPF-powered network observability agent designed for the modern cloud. It provides "X-Ray Vision" into your Linux servers, analyzing traffic at the kernel level without performance overhead.
 
 Unlike traditional tools that require complex sidecars or heavy instrumentation, Sennet is a single binary that drops in and starts streaming real-time metrics instantly.
