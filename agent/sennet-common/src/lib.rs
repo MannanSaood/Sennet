@@ -231,3 +231,102 @@ pub fn nf_verdict_str(verdict: u8) -> &'static str {
     }
 }
 
+// ============================================================================
+// Flow Tracking Types (Phase 8: Process Attribution)
+// ============================================================================
+
+/// 5-tuple flow key for tracking connections
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug)]
+pub struct FlowKey {
+    /// Source IP address (network byte order)
+    pub src_ip: u32,
+    /// Destination IP address (network byte order)
+    pub dst_ip: u32,
+    /// Source port (network byte order)
+    pub src_port: u16,
+    /// Destination port (network byte order)
+    pub dst_port: u16,
+    /// Protocol (6=TCP, 17=UDP)
+    pub protocol: u8,
+    /// Padding for alignment
+    pub _pad: [u8; 3],
+}
+
+/// Flow information with PID attribution
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug)]
+pub struct FlowInfo {
+    /// Process ID that owns this flow
+    pub pid: u32,
+    /// Thread group ID
+    pub tgid: u32,
+    /// Process name (comm, max 16 chars like Linux task_struct)
+    pub comm: [u8; 16],
+    /// Timestamp when flow was created (kernel time ns)
+    pub start_time_ns: u64,
+    /// Total bytes received on this flow
+    pub rx_bytes: u64,
+    /// Total bytes transmitted on this flow
+    pub tx_bytes: u64,
+    /// Total packets received
+    pub rx_packets: u32,
+    /// Total packets transmitted
+    pub tx_packets: u32,
+    /// Flow state (0=unknown, 1=active, 2=closing, 3=closed)
+    pub state: u8,
+    /// Direction (0=unknown, 1=outbound, 2=inbound)
+    pub direction: u8,
+    /// Padding
+    pub _pad: [u8; 2],
+}
+
+/// Flow event sent via RingBuf (for new/closed flows)
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug)]
+pub struct FlowEvent {
+    /// Timestamp of event
+    pub timestamp_ns: u64,
+    /// Event type (1=new, 2=update, 3=close)
+    pub event_type: u8,
+    /// Direction (1=outbound, 2=inbound)
+    pub direction: u8,
+    /// Protocol
+    pub protocol: u8,
+    /// Padding
+    pub _pad: u8,
+    /// Process ID
+    pub pid: u32,
+    /// Source IP
+    pub src_ip: u32,
+    /// Destination IP
+    pub dst_ip: u32,
+    /// Source port
+    pub src_port: u16,
+    /// Destination port
+    pub dst_port: u16,
+    /// Process name
+    pub comm: [u8; 16],
+}
+
+/// Flow event types
+pub mod flow_event_type {
+    pub const NEW: u8 = 1;
+    pub const UPDATE: u8 = 2;
+    pub const CLOSE: u8 = 3;
+}
+
+/// Flow direction
+pub mod flow_direction {
+    pub const UNKNOWN: u8 = 0;
+    pub const OUTBOUND: u8 = 1;
+    pub const INBOUND: u8 = 2;
+}
+
+/// Flow state
+pub mod flow_state {
+    pub const UNKNOWN: u8 = 0;
+    pub const ACTIVE: u8 = 1;
+    pub const CLOSING: u8 = 2;
+    pub const CLOSED: u8 = 3;
+}

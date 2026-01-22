@@ -61,10 +61,10 @@
         "phase_5": "COMPLETE",
         "phase_6": "COMPLETE",
         "phase_7": "COMPLETE",
-        "phase_8": "NOT_STARTED",
-        "phase_9": "NOT_STARTED",
+        "phase_8": "COMPLETE",
+        "phase_9": "COMPLETE",
         "phase_10": "NOT_STARTED",
-        "phase_11": "NOT_STARTED",
+        "phase_11": "COMPLETE",
         "phase_12": "NOT_STARTED"
     },
     "execution_plan": [
@@ -374,7 +374,7 @@
         {
             "phase_id": 8,
             "title": "Process Attribution & Flow Tracking",
-            "status": "NOT_STARTED",
+            "status": "COMPLETE",
             "priority": "MEDIUM",
             "track": "OPTION_A",
             "objective": "Show which process/PID is generating each network flow.",
@@ -382,45 +382,49 @@
                 "ebpf_hooks": [
                     "kprobe:tcp_connect",
                     "kprobe:inet_csk_accept",
-                    "socket:sock_ops"
+                    "kprobe:tcp_close"
                 ],
-                "maps": "HashMap<5-tuple, pid_info>"
+                "maps": "LruHashMap<5-tuple, pid_info> (64K entries)"
             },
             "steps": [
                 {
                     "id": "8.1",
                     "task": "Socket-to-PID Mapping",
+                    "status": "COMPLETE",
                     "context": "Track which process owns each socket.",
                     "actions": [
                         "Hook tcp_connect (outbound) and inet_csk_accept (inbound).",
                         "Call bpf_get_current_pid_tgid() to get PID.",
-                        "Store in HashMap: {src_ip, src_port, dst_ip, dst_port, proto} -> {pid, comm}.",
+                        "Store in LruHashMap: {src_ip, src_port, dst_ip, dst_port, proto} -> {pid, comm}.",
                         "Clean up on socket close (hook tcp_close)."
                     ],
-                    "validation": "`sennet top` shows PID and process name for each flow."
+                    "validation": "`sennet flows` shows PID and process name for each flow."
                 },
                 {
                     "id": "8.2",
                     "task": "Per-Flow Bandwidth Tracking",
+                    "status": "COMPLETE",
                     "context": "Track bytes/packets per connection, not just per-interface.",
                     "actions": [
-                        "Create LRU HashMap for flows (limit: 100k entries).",
-                        "Update counters on each packet in TC hook.",
-                        "Expose top-N flows by bandwidth in TUI."
+                        "Create LRU HashMap for flows (limit: 64k entries).",
+                        "Store FlowInfo with rx_bytes, tx_bytes, rx_packets, tx_packets.",
+                        "Expose flows via `sennet flows` CLI command."
                     ],
-                    "validation": "See 'ssh (pid 1234): 5 MB/s' in real-time."
+                    "validation": "`sennet flows` shows bandwidth per connection."
                 },
                 {
                     "id": "8.3",
-                    "task": "TUI Flows Panel",
-                    "context": "Live table of network flows with PID attribution.",
+                    "task": "CLI Flows Command",
+                    "status": "COMPLETE",
+                    "context": "Command-line tool for viewing flows with PID attribution.",
                     "actions": [
-                        "Add flows panel to `sennet top`.",
-                        "Columns: PID, Command, Local, Remote, Proto, RX/TX, State.",
-                        "Sortable by column (bandwidth, PID, etc.).",
-                        "Filter by process name or port."
+                        "Implement `sennet flows` command.",
+                        "Columns: PID, Command, Direction, Local, Remote, RX, TX.",
+                        "Sortable by: pid, bytes, packets.",
+                        "Filter by: --pid, --comm."
                     ],
-                    "validation": "`sennet top` looks like `htop` but for network."
+                    "validation": "`sennet flows --pid 1234` shows flows for specific process.",
+                    "notes": "TUI flows panel deferred to future enhancement."
                 }
             ]
         },
@@ -685,14 +689,14 @@
             {
                 "command": "sennet help",
                 "description": "Show all commands"
+            },
+            {
+                "command": "sennet flows",
+                "description": "List active network flows with PIDs",
+                "phase": 8
             }
         ],
         "planned": [
-            {
-                "command": "sennet flows",
-                "description": "List active network flows with PIDs (Phase 8)",
-                "phase": 8
-            },
             {
                 "command": "sennet cost",
                 "description": "Show egress cost attribution (Phase 9)",

@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sennet Control Plane</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
+    <style>
+        :root {
+            /* Enterprise Dark Theme */
+            --bg-body: #0f172a;
+            /* Slate 900 */
+            --bg-panel: #1e293b;
+            /* Slate 800 */
+            --border: #334155;
+            /* Slate 700 */
+            --text-main: #f8fafc;
+            /* Slate 50 */
+            --text-muted: #94a3b8;
+            /* Slate 400 */
+
+            /* Professional Accents */
+            --primary: #3b82f6;
+            /* Blue 500 */
+            --success: #10b981;
+            /* Emerald 500 */
+            --warning: #f59e0b;
+            /* Amber 500 */
+            --danger: #ef4444;
+            /* Red 500 */
+            --info: #6366f1;
+            /* Indigo 500 */
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background-color: var(--bg-body);
+            font-family: 'Inter', sans-serif;
+            color: var(--text-main);
+            min-height: 100vh;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .layout {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        /* Header */
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .logo {
+            font-family: 'Inter', sans-serif;
+            font-weight: 600;
+            font-size: 1.25rem;
+            letter-spacing: -0.025em;
+            color: var(--text-main);
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.375rem;
+            padding: 0.25rem 0.75rem;
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            color: var(--success);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .status-dot {
+            width: 6px;
+            height: 6px;
+            background: var(--success);
+            border-radius: 50%;
+        }
+
+        /* KPI Grid */
+        .kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .panel {
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 1.5rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+
+        .kpi-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 1rem;
+        }
+
+        .kpi-label {
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .icon {
+            width: 20px;
+            height: 20px;
+            color: var(--text-muted);
+        }
+
+        .kpi-value {
+            font-size: 2.25rem;
+            font-weight: 600;
+            letter-spacing: -0.05em;
+            font-family: 'Inter', sans-serif;
+            line-height: 1.2;
+        }
+
+        .kpi-trend {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+
+        /* Charts */
+        .charts-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1.5rem;
+        }
+
+        .chart-header {
+            margin-bottom: 1.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .chart-title {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--text-main);
+        }
+
+        .chart-meta {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        .chart-container {
+            position: relative;
+            height: 250px;
+            width: 100%;
+        }
+
+        @media (max-width: 1024px) {
+            .charts-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="layout">
+        <header>
+            <div class="brand">
+                <div class="logo">Sennet Control Plane</div>
+                <div style="width: 1px; height: 24px; background: var(--border);"></div>
+                <div style="font-size: 0.875rem; color: var(--text-muted)">Network Observability</div>
+            </div>
+            <div class="badge">
+                <div class="status-dot"></div>
+                SYSTEM ONLINE
+            </div>
+        </header>
+
+        <main>
+            <!-- KPI Cards -->
+            <div class="kpi-grid">
+                <!-- Active Agents -->
+                <div class="panel">
+                    <div class="kpi-header">
+                        <div class="kpi-label">Active Agents</div>
+                        <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10">
+                            </path>
+                        </svg>
+                    </div>
+                    <div class="kpi-value" id="activeAgents" style="color: var(--primary)">0</div>
+                    <div class="kpi-trend">Connected endpoints</div>
+                </div>
+
+                <!-- RX Packets -->
+                <div class="panel">
+                    <div class="kpi-header">
+                        <div class="kpi-label">Inbound Traffic</div>
+                        <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M19 14l-7 7m0 0l-7-7m7 7V3"></path>
+                        </svg>
+                    </div>
+                    <div class="kpi-value" id="rxPackets" style="color: var(--success)">0</div>
+                    <div class="kpi-trend">Packets / Second</div>
+                </div>
+
+                <!-- TX Packets -->
+                <div class="panel">
+                    <div class="kpi-header">
+                        <div class="kpi-label">Outbound Traffic</div>
+                        <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M5 10l7-7m0 0l7 7m-7-7v18"></path>
+                        </svg>
+                    </div>
+                    <div class="kpi-value" id="txPackets" style="color: var(--info)">0</div>
+                    <div class="kpi-trend">Packets / Second</div>
+                </div>
+
+                <!-- Drops -->
+                <div class="panel">
+                    <div class="kpi-header">
+                        <div class="kpi-label">Packet Drops</div>
+                        <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z">
+                            </path>
+                        </svg>
+                    </div>
+                    <div class="kpi-value" id="dropCount" style="color: var(--danger)">0</div>
+                    <div class="kpi-trend">Global events</div>
+                </div>
+            </div>
+
+            <!-- Charts -->
+            <div class="charts-grid">
+                <div class="panel">
+                    <div class="chart-header">
+                        <div class="chart-title">Traffic Volume</div>
+                        <div class="chart-meta">PACKETS/SEC</div>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="packetsChart"></canvas>
+                    </div>
+                </div>
+                <div class="panel">
+                    <div class="chart-header">
+                        <div class="chart-title">Bandwidth Usage</div>
+                        <div class="chart-meta">BYTES/SEC</div>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="bytesChart"></canvas>
+                    </div>
+                </div>
+                <div class="panel">
+                    <div class="chart-header">
+                        <div class="chart-title">Packet Loss</div>
+                        <div class="chart-meta">EVENTS</div>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="dropsChart"></canvas>
+                    </div>
+                </div>
+                <div class="panel">
+                    <div class="chart-header">
+                        <div class="chart-title">Fleet Uptime</div>
+                        <div class="chart-meta">SECONDS</div>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="uptimeChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const CONFIG = {
+            refreshInterval: 1000,
+            maxDataPoints: 60,
+            colors: {
+                primary: '#3b82f6',
+                success: '#10b981',
+                info: '#6366f1',
+                danger: '#ef4444',
+                grid: '#334155',
+                text: '#94a3b8'
+            }
+        };
+
+        Chart.defaults.color = CONFIG.colors.text;
+        Chart.defaults.font.family = "'Inter', sans-serif";
+
+        const commonOptions = {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            interaction: { mode: 'nearest', intersect: false, axis: 'x' },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    backgroundColor: '#1e293b',
+                    titleColor: '#f8fafc',
+                    bodyColor: '#cbd5e1',
+                    borderColor: '#334155',
+                    borderWidth: 1,
+                    padding: 8,
+                    displayColors: false,
+                    titleFont: { family: 'Inter', size: 12 },
+                    bodyFont: { family: 'JetBrains Mono', size: 12 }
+                }
+            },
+            scales: {
+                x: { display: false },
+                y: {
+                    border: { display: false },
+                    grid: { color: 'rgba(51, 65, 85, 0.3)' }, // Subtle grid
+                    beginAtZero: true,
+                    ticks: { font: { family: 'JetBrains Mono', size: 10 } }
+                }
+            },
+            elements: {
+                point: { radius: 0, hoverRadius: 4 },
+                line: { tension: 0.3, borderWidth: 2 }
+            }
+        };
+
+        function createGradient(ctx, color) {
+            const gradient = ctx.createLinearGradient(0, 0, 0, 250);
+            gradient.addColorStop(0, color.replace(')', ', 0.2)').replace('rgb', 'rgba'));
+            gradient.addColorStop(1, color.replace(')', ', 0)').replace('rgb', 'rgba'));
+            return gradient;
+        }
+
+        function initChart(canvasId, color) {
+            const ctx = document.getElementById(canvasId).getContext('2d');
+            return new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: Array(CONFIG.maxDataPoints).fill(''),
+                    datasets: [{
+                        data: Array(CONFIG.maxDataPoints).fill(0),
+                        borderColor: color,
+                        backgroundColor: createGradient(ctx, color),
+                        fill: true
+                    }]
+                },
+                options: commonOptions
+            });
+        }
+
+        const charts = {
+            packets: initChart('packetsChart', 'rgb(59, 130, 246)'),
+            bytes: initChart('bytesChart', 'rgb(16, 185, 129)'),
+            drops: initChart('dropsChart', 'rgb(239, 68, 68)'),
+            uptime: initChart('uptimeChart', 'rgb(99, 102, 241)')
+        };
+
+        let state = { prev: null, lastFetch: Date.now() };
+
+        function formatVal(num) {
+            if (num >= 1e9) return (num / 1e9).toFixed(1) + 'G';
+            if (num >= 1e6) return (num / 1e6).toFixed(1) + 'M';
+            if (num >= 1e3) return (num / 1e3).toFixed(1) + 'k';
+            return num.toString();
+        }
+
+        async function tick() {
+            try {
+                const res = await fetch('/api/stats');
+                const data = await res.json();
+
+                document.getElementById('activeAgents').innerText = data.active_agents;
+
+                if (state.prev) {
+                    const avgRx = Math.max(0, data.rx_packets - state.prev.rx_packets);
+                    const avgTx = Math.max(0, data.tx_packets - state.prev.tx_packets);
+
+                    document.getElementById('rxPackets').innerText = formatVal(avgRx);
+                    document.getElementById('txPackets').innerText = formatVal(avgTx);
+                    document.getElementById('dropCount').innerText = formatVal(data.drop_count);
+
+                    const pushData = (chart, val) => {
+                        const d = chart.data.datasets[0].data;
+                        d.push(val);
+                        d.shift();
+                        chart.update('none');
+                    };
+
+                    pushData(charts.packets, avgRx + avgTx);
+                    pushData(charts.bytes, (data.rx_bytes + data.tx_bytes) - (state.prev.rx_bytes + state.prev.tx_bytes));
+                    pushData(charts.drops, data.drop_count - state.prev.drop_count);
+                    pushData(charts.uptime, data.uptime_seconds);
+                }
+                state.prev = data;
+            } catch (e) {
+                console.error("Sync failed", e);
+            }
+        }
+
+        setInterval(tick, CONFIG.refreshInterval);
+        tick();
+
+    </script>
+</body>
+
+</html>

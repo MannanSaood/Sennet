@@ -4,6 +4,7 @@ package middleware
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 
 	"connectrpc.com/connect"
@@ -93,4 +94,30 @@ func extractBearerToken(header string) (string, error) {
 	}
 
 	return token, nil
+}
+
+// NewHTTPAuthMiddleware creates an HTTP middleware wrapper that validates API keys
+func NewHTTPAuthMiddleware(database *db.DB) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			authHeader := r.Header.Get("Authorization")
+			apiKey, err := extractBearerToken(authHeader)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusUnauthorized)
+				return
+			}
+
+			valid, err := database.ValidateAPIKey(apiKey)
+			if err != nil {
+				http.Error(w, "failed to validate API key", http.StatusInternalServerError)
+				return
+			}
+			if !valid {
+				http.Error(w, "invalid API key", http.StatusUnauthorized)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
 }

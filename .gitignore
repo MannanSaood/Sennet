@@ -24,6 +24,8 @@ sennet.db
 # ===== Config with secrets =====
 # Never commit config files with API keys!
 config.yaml
+config_utf8.yaml
+config_test.yaml
 sennet.yaml
 *.env
 .env

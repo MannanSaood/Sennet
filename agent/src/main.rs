@@ -15,6 +15,7 @@ mod tui;
 mod init;
 mod trace;
 mod k8s;
+mod flows;
 
 use anyhow::Result;
 use tracing::{info, error, warn};
@@ -99,6 +100,16 @@ async fn main() -> Result<()> {
                     print_diagnose_help();
                 } else {
                     run_diagnose(&diag_args).await?;
+                }
+                return Ok(());
+            }
+            "flows" => {
+                // Network flow tracking with PID attribution (Phase 8)
+                let flow_args: Vec<String> = args[2..].to_vec();
+                if flow_args.iter().any(|a| a == "--help" || a == "-h") {
+                    flows::print_help();
+                } else {
+                    flows::run(&flow_args)?;
                 }
                 return Ok(());
             }
@@ -219,6 +230,7 @@ fn print_help() {
     println!("    {}      Display agent status and connection info", "status".cyan());
     println!("    {}         Live traffic monitoring dashboard", "top".cyan());
     println!("    {}       One-shot packet tracing", "trace".cyan());
+    println!("    {}       Active flows with PID attribution", "flows".cyan());
     println!("    {}    K8s pod connectivity diagnosis", "diagnose".cyan());
     println!("    {}     Check for and install updates", "upgrade".cyan());
     println!("    {}     Print version information", "version".cyan());
@@ -230,6 +242,7 @@ fn print_help() {
     println!("    sennet status            # Check agent status");
     println!("    sennet top               # Monitor traffic live");
     println!("    sennet trace --dst 10.0.0.5  # Trace drops to IP");
+    println!("    sennet flows --pid 1234  # Show flows for process");
     println!();
     println!("{}", "CONFIGURATION:".yellow());
     println!("    Config file: /etc/sennet/config.yaml");

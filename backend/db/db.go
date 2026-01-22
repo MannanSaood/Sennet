@@ -70,6 +70,49 @@ func (db *DB) migrate() error {
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_agents_last_seen ON agents(last_seen);
+
+	CREATE TABLE IF NOT EXISTS cloud_configs (
+		id TEXT PRIMARY KEY,
+		provider TEXT NOT NULL,
+		config_json TEXT NOT NULL,
+		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS egress_costs (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		provider TEXT NOT NULL,
+		date TEXT NOT NULL,
+		service TEXT,
+		region TEXT,
+		cost_usd REAL NOT NULL,
+		bytes_out INTEGER,
+		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(provider, date, service, region)
+	);
+
+	CREATE TABLE IF NOT EXISTS cost_attributions (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		date TEXT NOT NULL,
+		entity_type TEXT NOT NULL,
+		entity_name TEXT NOT NULL,
+		cost_usd REAL NOT NULL,
+		bytes INTEGER,
+		provider TEXT,
+		region TEXT,
+		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS recommendations (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		type TEXT NOT NULL,
+		description TEXT NOT NULL,
+		estimated_savings_usd REAL,
+		status TEXT DEFAULT 'open',
+		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_egress_costs_date ON egress_costs(date);
+	CREATE INDEX IF NOT EXISTS idx_cost_attributions_date ON cost_attributions(date);
 	`
 
 	_, err := db.conn.Exec(schema)
@@ -79,6 +122,11 @@ func (db *DB) migrate() error {
 // Close closes the database connection
 func (db *DB) Close() error {
 	return db.conn.Close()
+}
+
+// Ping checks database connectivity
+func (db *DB) Ping() error {
+	return db.conn.Ping()
 }
 
 // CreateOrUpdateAgent creates or updates an agent record
@@ -189,4 +237,242 @@ func (db *DB) GetActiveAgentCount(minutes int) (int, error) {
 	var count int
 	err := db.conn.QueryRow(query, fmt.Sprintf("-%d minutes", minutes)).Scan(&count)
 	return count, err
+}
+
+// CloudConfig represents a cloud provider configuration
+type CloudConfig struct {
+	ID         string
+	Provider   string
+	ConfigJSON string
+	CreatedAt  time.Time
+}
+
+// EgressCost represents a daily egress cost aggregate
+type EgressCost struct {
+	ID        int64
+	Provider  string
+	Date      string
+	Service   string
+	Region    string
+	CostUSD   float64
+	BytesOut  int64
+	CreatedAt time.Time
+}
+
+// CostAttribution represents cost attributed to an entity
+type CostAttribution struct {
+	ID         int64
+	Date       string
+	EntityType string
+	EntityName string
+	CostUSD    float64
+	Bytes      int64
+	Provider   string
+	Region     string
+	CreatedAt  time.Time
+}
+
+// Recommendation represents an optimization recommendation
+type Recommendation struct {
+	ID                  int64
+	Type                string
+	Description         string
+	EstimatedSavingsUSD float64
+	Status              string
+	CreatedAt           time.Time
+}
+
+// SaveCloudConfig stores a cloud provider configuration
+func (db *DB) SaveCloudConfig(id, provider, configJSON string) error {
+	query := `
+	INSERT INTO cloud_configs (id, provider, config_json, created_at)
+	VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+	ON CONFLICT(id) DO UPDATE SET
+		provider = excluded.provider,
+		config_json = excluded.config_json
+	`
+	_, err := db.conn.Exec(query, id, provider, configJSON)
+	return err
+}
+
+// GetCloudConfigs returns all cloud configurations
+func (db *DB) GetCloudConfigs() ([]CloudConfig, error) {
+	query := `SELECT id, provider, config_json, created_at FROM cloud_configs ORDER BY created_at DESC`
+	rows, err := db.conn.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var configs []CloudConfig
+	for rows.Next() {
+		var c CloudConfig
+		if err := rows.Scan(&c.ID, &c.Provider, &c.ConfigJSON, &c.CreatedAt); err != nil {
+			return nil, err
+		}
+		configs = append(configs, c)
+	}
+	return configs, rows.Err()
+}
+
+// GetCloudConfig returns a specific cloud configuration by ID
+func (db *DB) GetCloudConfig(id string) (*CloudConfig, error) {
+	query := `SELECT id, provider, config_json, created_at FROM cloud_configs WHERE id = ?`
+	row := db.conn.QueryRow(query, id)
+
+	var c CloudConfig
+	err := row.Scan(&c.ID, &c.Provider, &c.ConfigJSON, &c.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+// DeleteCloudConfig removes a cloud configuration
+func (db *DB) DeleteCloudConfig(id string) error {
+	_, err := db.conn.Exec(`DELETE FROM cloud_configs WHERE id = ?`, id)
+	return err
+}
+
+// SaveEgressCost stores or updates a daily egress cost
+func (db *DB) SaveEgressCost(provider, date, service, region string, costUSD float64, bytesOut int64) error {
+	query := `
+	INSERT INTO egress_costs (provider, date, service, region, cost_usd, bytes_out, created_at)
+	VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+	ON CONFLICT(provider, date, service, region) DO UPDATE SET
+		cost_usd = excluded.cost_usd,
+		bytes_out = excluded.bytes_out
+	`
+	_, err := db.conn.Exec(query, provider, date, service, region, costUSD, bytesOut)
+	return err
+}
+
+// GetEgressCosts returns egress costs for a date range
+func (db *DB) GetEgressCosts(startDate, endDate string) ([]EgressCost, error) {
+	query := `
+	SELECT id, provider, date, service, region, cost_usd, bytes_out, created_at
+	FROM egress_costs
+	WHERE date >= ? AND date <= ?
+	ORDER BY date DESC, provider, service
+	`
+	rows, err := db.conn.Query(query, startDate, endDate)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var costs []EgressCost
+	for rows.Next() {
+		var c EgressCost
+		if err := rows.Scan(&c.ID, &c.Provider, &c.Date, &c.Service, &c.Region, &c.CostUSD, &c.BytesOut, &c.CreatedAt); err != nil {
+			return nil, err
+		}
+		costs = append(costs, c)
+	}
+	return costs, rows.Err()
+}
+
+// GetEgressCostsSummary returns aggregated costs by provider and service
+func (db *DB) GetEgressCostsSummary(startDate, endDate string) (map[string]float64, error) {
+	query := `
+	SELECT provider || ':' || COALESCE(service, 'unknown'), SUM(cost_usd)
+	FROM egress_costs
+	WHERE date >= ? AND date <= ?
+	GROUP BY provider, service
+	`
+	rows, err := db.conn.Query(query, startDate, endDate)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	summary := make(map[string]float64)
+	for rows.Next() {
+		var key string
+		var total float64
+		if err := rows.Scan(&key, &total); err != nil {
+			return nil, err
+		}
+		summary[key] = total
+	}
+	return summary, rows.Err()
+}
+
+// SaveCostAttribution stores a cost attribution record
+func (db *DB) SaveCostAttribution(date, entityType, entityName string, costUSD float64, bytes int64, provider, region string) error {
+	query := `
+	INSERT INTO cost_attributions (date, entity_type, entity_name, cost_usd, bytes, provider, region, created_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+	`
+	_, err := db.conn.Exec(query, date, entityType, entityName, costUSD, bytes, provider, region)
+	return err
+}
+
+// GetCostAttributions returns attributions for a date range
+func (db *DB) GetCostAttributions(startDate, endDate string) ([]CostAttribution, error) {
+	query := `
+	SELECT id, date, entity_type, entity_name, cost_usd, bytes, provider, region, created_at
+	FROM cost_attributions
+	WHERE date >= ? AND date <= ?
+	ORDER BY cost_usd DESC
+	`
+	rows, err := db.conn.Query(query, startDate, endDate)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var attrs []CostAttribution
+	for rows.Next() {
+		var a CostAttribution
+		if err := rows.Scan(&a.ID, &a.Date, &a.EntityType, &a.EntityName, &a.CostUSD, &a.Bytes, &a.Provider, &a.Region, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		attrs = append(attrs, a)
+	}
+	return attrs, rows.Err()
+}
+
+// SaveRecommendation stores an optimization recommendation
+func (db *DB) SaveRecommendation(recType, description string, estimatedSavingsUSD float64) error {
+	query := `
+	INSERT INTO recommendations (type, description, estimated_savings_usd, status, created_at)
+	VALUES (?, ?, ?, 'open', CURRENT_TIMESTAMP)
+	`
+	_, err := db.conn.Exec(query, recType, description, estimatedSavingsUSD)
+	return err
+}
+
+// GetRecommendations returns all open recommendations
+func (db *DB) GetRecommendations() ([]Recommendation, error) {
+	query := `
+	SELECT id, type, description, estimated_savings_usd, status, created_at
+	FROM recommendations
+	WHERE status = 'open'
+	ORDER BY estimated_savings_usd DESC
+	`
+	rows, err := db.conn.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var recs []Recommendation
+	for rows.Next() {
+		var r Recommendation
+		if err := rows.Scan(&r.ID, &r.Type, &r.Description, &r.EstimatedSavingsUSD, &r.Status, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		recs = append(recs, r)
+	}
+	return recs, rows.Err()
+}
+
+// UpdateRecommendationStatus updates the status of a recommendation
+func (db *DB) UpdateRecommendationStatus(id int64, status string) error {
+	_, err := db.conn.Exec(`UPDATE recommendations SET status = ? WHERE id = ?`, status, id)
+	return err
 }

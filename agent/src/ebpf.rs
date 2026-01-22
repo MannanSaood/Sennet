@@ -136,12 +136,109 @@ pub fn nf_verdict_str(verdict: u8) -> &'static str {
     }
 }
 
+// ============================================================================
+// Flow Tracking Types (Phase 8: Process Attribution)
+// ============================================================================
+
+/// 5-tuple flow key for tracking connections (mirrors eBPF side)
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Hash)]
+#[allow(dead_code)]
+pub struct FlowKey {
+    pub src_ip: u32,
+    pub dst_ip: u32,
+    pub src_port: u16,
+    pub dst_port: u16,
+    pub protocol: u8,
+    pub _pad: [u8; 3],
+}
+
+#[cfg(target_os = "linux")]
+unsafe impl aya::Pod for FlowKey {}
+
+/// Flow information with PID attribution (mirrors eBPF side)
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug)]
+#[allow(dead_code)]
+pub struct FlowInfo {
+    pub pid: u32,
+    pub tgid: u32,
+    pub comm: [u8; 16],
+    pub start_time_ns: u64,
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
+    pub rx_packets: u32,
+    pub tx_packets: u32,
+    pub state: u8,
+    pub direction: u8,
+    pub _pad: [u8; 2],
+}
+
+#[cfg(target_os = "linux")]
+unsafe impl aya::Pod for FlowInfo {}
+
+/// Flow event from RingBuf (mirrors eBPF side)
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug)]
+#[allow(dead_code)]
+pub struct FlowEvent {
+    pub timestamp_ns: u64,
+    pub event_type: u8,
+    pub direction: u8,
+    pub protocol: u8,
+    pub _pad: u8,
+    pub pid: u32,
+    pub src_ip: u32,
+    pub dst_ip: u32,
+    pub src_port: u16,
+    pub dst_port: u16,
+    pub comm: [u8; 16],
+}
+
+#[cfg(target_os = "linux")]
+unsafe impl aya::Pod for FlowEvent {}
+
+/// Human-readable flow direction
+#[allow(dead_code)]
+pub fn flow_direction_str(direction: u8) -> &'static str {
+    match direction {
+        1 => "OUT",
+        2 => "IN",
+        _ => "?",
+    }
+}
+
+/// Human-readable flow event type
+#[allow(dead_code)]
+pub fn flow_event_type_str(event_type: u8) -> &'static str {
+    match event_type {
+        1 => "NEW",
+        2 => "UPDATE",
+        3 => "CLOSE",
+        _ => "UNKNOWN",
+    }
+}
+
+/// Convert comm bytes to string
+#[allow(dead_code)]
+pub fn comm_to_string(comm: &[u8; 16]) -> String {
+    let end = comm.iter().position(|&c| c == 0).unwrap_or(16);
+    String::from_utf8_lossy(&comm[..end]).to_string()
+}
+
+/// Format IP address from network byte order
+#[allow(dead_code)]
+pub fn format_ip(ip: u32) -> String {
+    let bytes = ip.to_be_bytes();
+    format!("{}.{}.{}.{}", bytes[0], bytes[1], bytes[2], bytes[3])
+}
+
 #[cfg(target_os = "linux")]
 use {
     aya::{
         include_bytes_aligned,
-        programs::{tc, SchedClassifier, TcAttachType, TracePoint},
-        maps::PerCpuArray,
+        programs::{tc, SchedClassifier, TcAttachType, TracePoint, KProbe},
+        maps::{PerCpuArray, lru_hash_map::LruHashMap},
         Bpf,
     },
     std::path::Path,
@@ -160,6 +257,8 @@ pub struct EbpfManager {
     pub drop_tracing_enabled: bool,
     /// Whether netfilter tracing is active (nf_hook_slow tracepoint attached)
     pub nf_tracing_enabled: bool,
+    /// Whether flow tracking is active (tcp_connect/inet_csk_accept kprobes attached) (Phase 8)
+    pub flow_tracing_enabled: bool,
 }
 
 #[allow(dead_code)] // Methods used on Linux; mock impl on other platforms
@@ -349,11 +448,80 @@ impl EbpfManager {
             let _ = map.pin(pin_path.join("nf_events"));
         }
 
+        // Try to attach flow tracking kprobes (Phase 8)
+        let mut flow_tracing_enabled = false;
+        
+        // tcp_connect kprobe - track outbound connections
+        if let Some(prog) = bpf.program_mut("tcp_connect") {
+            match prog.try_into() as Result<&mut KProbe, _> {
+                Ok(kp) => {
+                    if let Err(e) = kp.load() {
+                        tracing::warn!("Failed to load tcp_connect kprobe: {}", e);
+                    } else if let Err(e) = kp.attach("tcp_connect", 0) {
+                        tracing::warn!("Failed to attach tcp_connect kprobe: {}", e);
+                    } else {
+                        tracing::info!("Attached tcp_connect kprobe for outbound flow tracking");
+                        flow_tracing_enabled = true;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("tcp_connect program not a kprobe: {}", e);
+                }
+            }
+        }
+        
+        // inet_csk_accept kprobe - track inbound connections
+        if let Some(prog) = bpf.program_mut("inet_csk_accept") {
+            match prog.try_into() as Result<&mut KProbe, _> {
+                Ok(kp) => {
+                    if let Err(e) = kp.load() {
+                        tracing::warn!("Failed to load inet_csk_accept kprobe: {}", e);
+                    } else if let Err(e) = kp.attach("inet_csk_accept", 0) {
+                        tracing::warn!("Failed to attach inet_csk_accept kprobe: {}", e);
+                    } else {
+                        tracing::info!("Attached inet_csk_accept kprobe for inbound flow tracking");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("inet_csk_accept program not a kprobe: {}", e);
+                }
+            }
+        }
+        
+        // tcp_close kprobe - track connection closures
+        if let Some(prog) = bpf.program_mut("tcp_close") {
+            match prog.try_into() as Result<&mut KProbe, _> {
+                Ok(kp) => {
+                    if let Err(e) = kp.load() {
+                        tracing::warn!("Failed to load tcp_close kprobe: {}", e);
+                    } else if let Err(e) = kp.attach("tcp_close", 0) {
+                        tracing::warn!("Failed to attach tcp_close kprobe: {}", e);
+                    } else {
+                        tracing::info!("Attached tcp_close kprobe for flow cleanup");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("tcp_close program not a kprobe: {}", e);
+                }
+            }
+        }
+        
+        // Pin FLOWS map if available
+        if let Some(map) = bpf.map_mut("FLOWS") {
+            let _ = map.pin(pin_path.join("flows"));
+        }
+        
+        // Pin FLOW_EVENTS map if available
+        if let Some(map) = bpf.map_mut("FLOW_EVENTS") {
+            let _ = map.pin(pin_path.join("flow_events"));
+        }
+
         Ok(Self {
             interface: interface.to_string(),
             bpf,
             drop_tracing_enabled,
             nf_tracing_enabled,
+            flow_tracing_enabled,
         })
     }
 
@@ -392,6 +560,22 @@ impl EbpfManager {
         Ok(total)
     }
 
+    /// Read all active flows from eBPF LRU HashMap (Phase 8)
+    #[cfg(target_os = "linux")]
+    pub fn read_flows(&self) -> Result<Vec<(FlowKey, FlowInfo)>> {
+        let flows_map: LruHashMap<_, FlowKey, FlowInfo> = 
+            LruHashMap::try_from(self.bpf.map("FLOWS").ok_or_else(|| anyhow::anyhow!("FLOWS map not found"))?)?;
+        
+        let mut flows = Vec::new();
+        for item in flows_map.iter() {
+            if let Ok((key, value)) = item {
+                flows.push((key, value));
+            }
+        }
+        
+        Ok(flows)
+    }
+
     // Stub for non-Linux platforms
     #[cfg(not(target_os = "linux"))]
     pub fn load_and_attach(interface: &str) -> Result<Self> {
@@ -400,12 +584,18 @@ impl EbpfManager {
             interface: interface.to_string(),
             drop_tracing_enabled: false,
             nf_tracing_enabled: false,
+            flow_tracing_enabled: false,
         })
     }
 
     #[cfg(not(target_os = "linux"))]
     pub fn read_counters(&self) -> Result<PacketCounters> {
         Ok(PacketCounters::default())
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn read_flows(&self) -> Result<Vec<(FlowKey, FlowInfo)>> {
+        Ok(Vec::new())
     }
 
     /// Get the attached interface name

@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"flag"
 	"fmt"
 	"log"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/sennet/sennet/backend/cloud"
 	"github.com/sennet/sennet/backend/db"
 	"github.com/sennet/sennet/backend/handler"
 	"github.com/sennet/sennet/backend/metrics"
@@ -109,19 +111,54 @@ func runServer(port, dbPath, latestVersion string) {
 	// Create handler
 	sentinelHandler := handler.NewSentinelHandler(database, latestVersion)
 
-	// Setup routes with middleware
+	// Initialize cloud provider registry
+	cloudRegistry := cloud.NewRegistry()
+	log.Printf("  Cloud provider registry initialized")
+
+	// Load existing cloud configs from database
+	cloudConfigs, err := database.GetCloudConfigs()
+	if err != nil {
+		log.Printf("Warning: Failed to load cloud configs: %v", err)
+	} else {
+		for _, cfg := range cloudConfigs {
+			parsed, err := cloud.CloudConfigFromJSON(cfg.ConfigJSON)
+			if err != nil {
+				log.Printf("Warning: Failed to parse cloud config %s: %v", cfg.ID, err)
+				continue
+			}
+			provider, err := cloud.CreateProvider(parsed)
+			if err != nil {
+				log.Printf("Warning: Failed to create provider %s: %v", cfg.ID, err)
+				continue
+			}
+			cloudRegistry.Register(cfg.ID, provider)
+			log.Printf("  Loaded cloud config: %s (%s)", cfg.ID, cfg.Provider)
+		}
+	}
+
+	// Create cost handler
+	costHandler := handler.NewCostHandler(database, cloudRegistry)
+
+	// Create health handler
+	healthHandler := handler.NewHealthHandler(database, latestVersion)
+
+	// Initialize middleware
+	rateLimiter := middleware.NewRateLimiter(100, 20) // 100 req/min, burst 20
+	loggingMiddleware := middleware.NewLoggingMiddleware(log.Default())
+
+	// Setup routes
 	mux := http.NewServeMux()
 
-	// Health check endpoint (no auth required)
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
-	})
+	// Health and probe endpoints (no auth, no rate limit)
+	mux.HandleFunc("/health", healthHandler.HandleHealth)
+	mux.HandleFunc("/ready", healthHandler.HandleReady)
+	mux.HandleFunc("/live", healthHandler.HandleLive)
+	mux.HandleFunc("/debug", healthHandler.HandleDebug)
 
 	// Prometheus metrics endpoint (no auth required)
 	mux.Handle("/metrics", metrics.Handler())
 	log.Printf("  Metrics endpoint: GET http://localhost:%s/metrics", port)
+	log.Printf("  Health endpoints: /health, /ready, /live")
 
 	// ConnectRPC handler with auth middleware
 	path, connectHandler := sentinelv1connect.NewSentinelServiceHandler(
@@ -130,10 +167,31 @@ func runServer(port, dbPath, latestVersion string) {
 	)
 	mux.Handle(path, connectHandler)
 
+	// Cost API endpoints (with auth)
+	authWrapper := middleware.NewHTTPAuthMiddleware(database)
+	mux.Handle("/api/costs", authWrapper(http.HandlerFunc(costHandler.HandleGetCosts)))
+	mux.Handle("/api/costs/summary", authWrapper(http.HandlerFunc(costHandler.HandleGetCostsSummary)))
+	mux.Handle("/api/clouds", authWrapper(http.HandlerFunc(costHandler.HandleClouds)))
+	mux.Handle("/api/recommendations", authWrapper(http.HandlerFunc(costHandler.HandleGetRecommendations)))
+	mux.Handle("/api/sync-costs", authWrapper(http.HandlerFunc(costHandler.HandleSyncCosts)))
+	log.Printf("  Cost API endpoints: /api/costs, /api/clouds, /api/recommendations")
+
+	// Dashboard endpoints (no auth - public dashboard)
+	statsHandler := handler.NewStatsHandler(database)
+	mux.HandleFunc("/api/stats", statsHandler.HandleStats)
+	mux.HandleFunc("/dashboard", serveDashboard)
+	mux.HandleFunc("/dashboard/", serveDashboard)
+	log.Printf("  Dashboard: http://localhost:%s/dashboard", port)
+
+	// Wrap mux with middleware chain: logging -> rate limiting -> mux
+	var finalHandler http.Handler = mux
+	finalHandler = rateLimiter.Middleware(finalHandler)
+	finalHandler = loggingMiddleware.Middleware(finalHandler)
+
 	// Create server
 	server := &http.Server{
 		Addr:         ":" + port,
-		Handler:      mux,
+		Handler:      finalHandler,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -167,4 +225,12 @@ func runServer(port, dbPath, latestVersion string) {
 
 	<-done
 	log.Println("Server stopped")
+}
+
+//go:embed dashboard/index.html
+var dashboardHTML []byte
+
+func serveDashboard(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(dashboardHTML)
 }

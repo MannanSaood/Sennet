@@ -4,19 +4,20 @@
 //! 1. TC (Traffic Control) hook - counts packets/bytes for ingress/egress
 //! 2. kfree_skb tracepoint - captures packet drop reasons (Phase 6.1)
 //! 3. nf_hook_slow tracepoint - captures netfilter hook/verdict (Phase 6.2)
+//! 4. kprobes for tcp_connect/inet_csk_accept/tcp_close - flow tracking (Phase 8)
 
 #![no_std]
 #![no_main]
 
 use aya_ebpf::{
     bindings::TC_ACT_PIPE,
-    macros::{classifier, map, tracepoint},
-    maps::{PerCpuArray, RingBuf},
-    programs::{TcContext, TracePointContext},
-    helpers::bpf_ktime_get_ns,
+    macros::{classifier, map, tracepoint, kprobe},
+    maps::{PerCpuArray, RingBuf, LruHashMap},
+    programs::{TcContext, TracePointContext, ProbeContext},
+    helpers::{bpf_ktime_get_ns, bpf_get_current_pid_tgid, bpf_get_current_comm},
 };
 // use aya_log_ebpf::info; // Reserved for future logging
-use sennet_common::{PacketCounters, PacketEvent, DropEvent, NetfilterEvent};
+use sennet_common::{PacketCounters, PacketEvent, DropEvent, NetfilterEvent, FlowKey, FlowInfo, FlowEvent};
 
 /// Per-CPU counters for packet statistics
 /// Index 0 = ingress, Index 1 = egress
@@ -34,6 +35,15 @@ static DROP_EVENTS: RingBuf = RingBuf::with_byte_size(64 * 1024, 0); // 64KB
 /// Ring buffer for netfilter events (Phase 6.2)
 #[map]
 static NF_EVENTS: RingBuf = RingBuf::with_byte_size(32 * 1024, 0); // 32KB
+
+/// LRU HashMap for flow tracking (Phase 8)
+/// Key: FlowKey (5-tuple), Value: FlowInfo (PID, comm, counters)
+#[map]
+static FLOWS: LruHashMap<FlowKey, FlowInfo> = LruHashMap::with_max_entries(65536, 0); // 64K flows
+
+/// Ring buffer for flow events (new/close) (Phase 8)
+#[map]
+static FLOW_EVENTS: RingBuf = RingBuf::with_byte_size(64 * 1024, 0); // 64KB
 
 /// Large packet threshold (bytes)
 const LARGE_PACKET_THRESHOLD: u32 = 9000; // Jumbo frame size
@@ -213,6 +223,247 @@ fn try_nf_hook_slow(ctx: &TracePointContext) -> Result<u32, ()> {
             }
             entry.submit(0);
         }
+    }
+    
+    Ok(0)
+}
+
+// =============================================================================
+// Flow Tracking kprobes (Phase 8: Process Attribution)
+// =============================================================================
+
+/// kprobe for tcp_connect - track outbound TCP connections
+/// 
+/// Attaches to: kprobe/tcp_connect
+/// 
+/// This captures when a process initiates a TCP connection.
+/// We extract the 5-tuple and PID to track which process owns the socket.
+#[kprobe]
+pub fn tcp_connect(ctx: ProbeContext) -> u32 {
+    match try_tcp_connect(&ctx) {
+        Ok(ret) => ret,
+        Err(_) => 0,
+    }
+}
+
+#[inline(always)]
+fn try_tcp_connect(ctx: &ProbeContext) -> Result<u32, ()> {
+    // Get PID/TGID
+    let pid_tgid = bpf_get_current_pid_tgid();
+    let pid = (pid_tgid >> 32) as u32;
+    let tgid = pid_tgid as u32;
+    
+    // Get process name
+    let mut comm: [u8; 16] = [0; 16];
+    let _ = bpf_get_current_comm(&mut comm);
+    
+    // Read socket info from first argument (struct sock *sk)
+    // sock structure offsets vary by kernel, using common offsets:
+    //   __sk_common.skc_daddr (dest IP): offset ~4
+    //   __sk_common.skc_rcv_saddr (src IP): offset ~0  
+    //   __sk_common.skc_dport (dest port): offset ~12
+    //   __sk_common.skc_num (src port): offset ~14
+    let sk: *const u8 = ctx.arg(0).ok_or(())?;
+    
+    // Read socket addresses (these offsets work for many kernels)
+    // For a production system, use BTF or vmlinux.h for proper offsets
+    let src_ip: u32 = unsafe { core::ptr::read_unaligned(sk.add(4) as *const u32) };
+    let dst_ip: u32 = unsafe { core::ptr::read_unaligned(sk.add(0) as *const u32) };
+    let dst_port: u16 = unsafe { core::ptr::read_unaligned(sk.add(12) as *const u16) };
+    let src_port: u16 = unsafe { core::ptr::read_unaligned(sk.add(14) as *const u16) };
+    
+    // Create flow key
+    let key = FlowKey {
+        src_ip,
+        dst_ip,
+        src_port,
+        dst_port,
+        protocol: 6, // TCP
+        _pad: [0; 3],
+    };
+    
+    // Create flow info
+    let info = FlowInfo {
+        pid,
+        tgid,
+        comm,
+        start_time_ns: unsafe { bpf_ktime_get_ns() },
+        rx_bytes: 0,
+        tx_bytes: 0,
+        rx_packets: 0,
+        tx_packets: 0,
+        state: 1, // ACTIVE
+        direction: 1, // OUTBOUND
+        _pad: [0; 2],
+    };
+    
+    // Insert into flow map
+    let _ = FLOWS.insert(&key, &info, 0);
+    
+    // Emit flow event
+    if let Some(mut entry) = FLOW_EVENTS.reserve::<FlowEvent>(0) {
+        let event = entry.as_mut_ptr();
+        unsafe {
+            (*event).timestamp_ns = bpf_ktime_get_ns();
+            (*event).event_type = 1; // NEW
+            (*event).direction = 1; // OUTBOUND
+            (*event).protocol = 6; // TCP
+            (*event)._pad = 0;
+            (*event).pid = pid;
+            (*event).src_ip = src_ip;
+            (*event).dst_ip = dst_ip;
+            (*event).src_port = src_port;
+            (*event).dst_port = dst_port;
+            (*event).comm = comm;
+        }
+        entry.submit(0);
+    }
+    
+    Ok(0)
+}
+
+/// kprobe for inet_csk_accept - track inbound TCP connections
+/// 
+/// Attaches to: kretprobe/inet_csk_accept
+/// 
+/// This captures when a process accepts an incoming TCP connection.
+#[kprobe]
+pub fn inet_csk_accept(ctx: ProbeContext) -> u32 {
+    match try_inet_csk_accept(&ctx) {
+        Ok(ret) => ret,
+        Err(_) => 0,
+    }
+}
+
+#[inline(always)]
+fn try_inet_csk_accept(ctx: &ProbeContext) -> Result<u32, ()> {
+    // Get PID/TGID
+    let pid_tgid = bpf_get_current_pid_tgid();
+    let pid = (pid_tgid >> 32) as u32;
+    let tgid = pid_tgid as u32;
+    
+    // Get process name
+    let mut comm: [u8; 16] = [0; 16];
+    let _ = bpf_get_current_comm(&mut comm);
+    
+    // Read socket info from return value or first argument
+    let sk: *const u8 = ctx.arg(0).ok_or(())?;
+    
+    // Read socket addresses
+    let src_ip: u32 = unsafe { core::ptr::read_unaligned(sk.add(4) as *const u32) };
+    let dst_ip: u32 = unsafe { core::ptr::read_unaligned(sk.add(0) as *const u32) };
+    let dst_port: u16 = unsafe { core::ptr::read_unaligned(sk.add(12) as *const u16) };
+    let src_port: u16 = unsafe { core::ptr::read_unaligned(sk.add(14) as *const u16) };
+    
+    // Create flow key (swap src/dst for inbound)
+    let key = FlowKey {
+        src_ip: dst_ip, // Remote is source for inbound
+        dst_ip: src_ip, // Local is dest for inbound
+        src_port: dst_port,
+        dst_port: src_port,
+        protocol: 6, // TCP
+        _pad: [0; 3],
+    };
+    
+    // Create flow info
+    let info = FlowInfo {
+        pid,
+        tgid,
+        comm,
+        start_time_ns: unsafe { bpf_ktime_get_ns() },
+        rx_bytes: 0,
+        tx_bytes: 0,
+        rx_packets: 0,
+        tx_packets: 0,
+        state: 1, // ACTIVE
+        direction: 2, // INBOUND
+        _pad: [0; 2],
+    };
+    
+    // Insert into flow map
+    let _ = FLOWS.insert(&key, &info, 0);
+    
+    // Emit flow event
+    if let Some(mut entry) = FLOW_EVENTS.reserve::<FlowEvent>(0) {
+        let event = entry.as_mut_ptr();
+        unsafe {
+            (*event).timestamp_ns = bpf_ktime_get_ns();
+            (*event).event_type = 1; // NEW
+            (*event).direction = 2; // INBOUND
+            (*event).protocol = 6; // TCP
+            (*event)._pad = 0;
+            (*event).pid = pid;
+            (*event).src_ip = dst_ip;
+            (*event).dst_ip = src_ip;
+            (*event).src_port = dst_port;
+            (*event).dst_port = src_port;
+            (*event).comm = comm;
+        }
+        entry.submit(0);
+    }
+    
+    Ok(0)
+}
+
+/// kprobe for tcp_close - track connection closures
+/// 
+/// Attaches to: kprobe/tcp_close
+#[kprobe]
+pub fn tcp_close(ctx: ProbeContext) -> u32 {
+    match try_tcp_close(&ctx) {
+        Ok(ret) => ret,
+        Err(_) => 0,
+    }
+}
+
+#[inline(always)]
+fn try_tcp_close(ctx: &ProbeContext) -> Result<u32, ()> {
+    // Get PID
+    let pid_tgid = bpf_get_current_pid_tgid();
+    let pid = (pid_tgid >> 32) as u32;
+    
+    // Get process name
+    let mut comm: [u8; 16] = [0; 16];
+    let _ = bpf_get_current_comm(&mut comm);
+    
+    // Read socket info
+    let sk: *const u8 = ctx.arg(0).ok_or(())?;
+    
+    let src_ip: u32 = unsafe { core::ptr::read_unaligned(sk.add(4) as *const u32) };
+    let dst_ip: u32 = unsafe { core::ptr::read_unaligned(sk.add(0) as *const u32) };
+    let dst_port: u16 = unsafe { core::ptr::read_unaligned(sk.add(12) as *const u16) };
+    let src_port: u16 = unsafe { core::ptr::read_unaligned(sk.add(14) as *const u16) };
+    
+    // Create flow key
+    let key = FlowKey {
+        src_ip,
+        dst_ip,
+        src_port,
+        dst_port,
+        protocol: 6,
+        _pad: [0; 3],
+    };
+    
+    // Remove from flow map
+    let _ = FLOWS.remove(&key);
+    
+    // Emit close event
+    if let Some(mut entry) = FLOW_EVENTS.reserve::<FlowEvent>(0) {
+        let event = entry.as_mut_ptr();
+        unsafe {
+            (*event).timestamp_ns = bpf_ktime_get_ns();
+            (*event).event_type = 3; // CLOSE
+            (*event).direction = 0; // UNKNOWN
+            (*event).protocol = 6;
+            (*event)._pad = 0;
+            (*event).pid = pid;
+            (*event).src_ip = src_ip;
+            (*event).dst_ip = dst_ip;
+            (*event).src_port = src_port;
+            (*event).dst_port = dst_port;
+            (*event).comm = comm;
+        }
+        entry.submit(0);
     }
     
     Ok(0)
