@@ -42,7 +42,7 @@ export function SettingsPage() {
     const fetchKeys = async () => {
         setIsLoading(true);
         try {
-            const res = await api.get("/keys");
+            const res = await api.get("/api/keys");
             setKeys(res.data || []);
         } catch (err) {
             console.error("Failed to fetch keys", err);
@@ -54,7 +54,7 @@ export function SettingsPage() {
     const handleGenerateKey = async () => {
         try {
             const name = `Key ${keys.length + 1}`;
-            await api.post("/keys/create", { name });
+            await api.post("/api/keys/create", { name });
             fetchKeys();
         } catch (err) {
             console.error("Failed to create key", err);
