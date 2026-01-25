@@ -254,8 +254,7 @@ fn try_tcp_connect(ctx: &ProbeContext) -> Result<u32, ()> {
     let tgid = pid_tgid as u32;
     
     // Get process name
-    let mut comm: [u8; 16] = [0; 16];
-    let _ = bpf_get_current_comm(&mut comm);
+    let comm = bpf_get_current_comm().unwrap_or([0; 16]);
     
     // Read socket info from first argument (struct sock *sk)
     // sock structure offsets vary by kernel, using common offsets:
@@ -343,8 +342,7 @@ fn try_inet_csk_accept(ctx: &ProbeContext) -> Result<u32, ()> {
     let tgid = pid_tgid as u32;
     
     // Get process name
-    let mut comm: [u8; 16] = [0; 16];
-    let _ = bpf_get_current_comm(&mut comm);
+    let comm = bpf_get_current_comm().unwrap_or([0; 16]);
     
     // Read socket info from return value or first argument
     let sk: *const u8 = ctx.arg(0).ok_or(())?;
@@ -423,8 +421,7 @@ fn try_tcp_close(ctx: &ProbeContext) -> Result<u32, ()> {
     let pid = (pid_tgid >> 32) as u32;
     
     // Get process name
-    let mut comm: [u8; 16] = [0; 16];
-    let _ = bpf_get_current_comm(&mut comm);
+    let comm = bpf_get_current_comm().unwrap_or([0; 16]);
     
     // Read socket info
     let sk: *const u8 = ctx.arg(0).ok_or(())?;
