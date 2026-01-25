@@ -238,7 +238,7 @@ use {
     aya::{
         include_bytes_aligned,
         programs::{tc, SchedClassifier, TcAttachType, TracePoint, KProbe},
-        maps::{PerCpuArray, lru_hash_map::LruHashMap},
+        maps::{PerCpuArray, HashMap as LruHashMap},
         Bpf,
     },
     std::path::Path,

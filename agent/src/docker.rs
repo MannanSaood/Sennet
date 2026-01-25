@@ -3,10 +3,10 @@
 //! Provides container detection and monitoring for standalone Docker environments
 //! (not Kubernetes). For K8s environments, use the k8s.rs module instead.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::collections::HashMap;
 use std::path::Path;
-use tracing::{debug, info, warn};
+use tracing::info;
 
 /// Docker container information
 #[derive(Debug, Clone)]
