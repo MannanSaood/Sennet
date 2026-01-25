@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -76,10 +77,10 @@ func (rl *RateLimiter) Allow(key string) bool {
 
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key := r.Header.Get("Authorization")
-		if key == "" {
-			key = r.RemoteAddr
-		}
+		// SECURITY FIX: Always include IP to prevent bypass by rotating auth headers
+		ip := getClientIP(r)
+		authKey := r.Header.Get("Authorization")
+		key := ip + ":" + authKey // Combined key prevents bypass
 
 		if !rl.Allow(key) {
 			w.Header().Set("Retry-After", "60")
@@ -89,4 +90,24 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// getClientIP extracts the real client IP, handling proxies
+func getClientIP(r *http.Request) string {
+	// Check X-Forwarded-For for proxied requests
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// Take the first IP (original client)
+		parts := strings.Split(xff, ",")
+		return strings.TrimSpace(parts[0])
+	}
+	// Check X-Real-IP
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return xri
+	}
+	// Fall back to RemoteAddr (strip port)
+	host := r.RemoteAddr
+	if idx := strings.LastIndex(host, ":"); idx != -1 {
+		return host[:idx]
+	}
+	return host
 }

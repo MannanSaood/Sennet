@@ -17,11 +17,22 @@ type DB struct {
 	conn *sql.DB
 }
 
+// User represents a user in the database (linked to Firebase Auth)
+type User struct {
+	ID          string
+	FirebaseUID string
+	Email       string
+	Name        string
+	Role        string // "admin", "user"
+	CreatedAt   time.Time
+}
+
 // Agent represents a registered agent in the database
 type Agent struct {
 	ID       string
 	LastSeen time.Time
 	Version  string
+	OwnerID  *string // Owner user ID for multi-tenancy
 }
 
 // APIKey represents an API key in the database
@@ -29,6 +40,9 @@ type APIKey struct {
 	Key       string
 	Name      string
 	CreatedAt time.Time
+	ExpiresAt *time.Time // nil means never expires
+	LastUsed  *time.Time // nil means never used
+	UserID    *string    // Owner user ID
 }
 
 // New creates a new database connection and initializes schema
@@ -57,16 +71,33 @@ func New(path string) (*DB, error) {
 // migrate creates the database schema
 func (db *DB) migrate() error {
 	schema := `
+	-- Users table (linked to Firebase Auth)
+	CREATE TABLE IF NOT EXISTS users (
+		id TEXT PRIMARY KEY,
+		firebase_uid TEXT UNIQUE,
+		email TEXT UNIQUE NOT NULL,
+		name TEXT,
+		role TEXT DEFAULT 'user',
+		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_users_firebase ON users(firebase_uid);
+	CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+
 	CREATE TABLE IF NOT EXISTS agents (
 		id TEXT PRIMARY KEY,
 		last_seen TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		version TEXT NOT NULL DEFAULT ''
+		version TEXT NOT NULL DEFAULT '',
+		owner_id TEXT REFERENCES users(id)
 	);
 
 	CREATE TABLE IF NOT EXISTS api_keys (
 		key TEXT PRIMARY KEY,
 		name TEXT NOT NULL,
-		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		expires_at TIMESTAMP,
+		last_used TIMESTAMP,
+		user_id TEXT REFERENCES users(id)
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_agents_last_seen ON agents(last_seen);
@@ -204,9 +235,69 @@ func (db *DB) ValidateAPIKey(key string) (bool, error) {
 	return true, nil
 }
 
+// APIKeyExists checks if an API key exists (for signature verification)
+func (db *DB) APIKeyExists(key string) (bool, error) {
+	query := `SELECT 1 FROM api_keys WHERE key = ? AND (expires_at IS NULL OR expires_at > datetime('now'))`
+	row := db.conn.QueryRow(query, key)
+
+	var exists int
+	err := row.Scan(&exists)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// UpdateAPIKeyLastUsed updates the last_used timestamp for an API key
+func (db *DB) UpdateAPIKeyLastUsed(key string) error {
+	query := `UPDATE api_keys SET last_used = CURRENT_TIMESTAMP WHERE key = ?`
+	_, err := db.conn.Exec(query, key)
+	return err
+}
+
+// RotateAPIKey creates a new API key and marks the old one as expiring in 24 hours
+// Returns the new API key
+func (db *DB) RotateAPIKey(oldKey string) (string, error) {
+	// Get the name of the old key
+	var name string
+	err := db.conn.QueryRow(`SELECT name FROM api_keys WHERE key = ?`, oldKey).Scan(&name)
+	if err != nil {
+		return "", fmt.Errorf("old key not found: %w", err)
+	}
+
+	// Mark old key to expire in 24 hours (grace period for agent updates)
+	_, err = db.conn.Exec(
+		`UPDATE api_keys SET expires_at = datetime('now', '+1 day') WHERE key = ?`,
+		oldKey,
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to set expiration on old key: %w", err)
+	}
+
+	// Create new key with same name (appending "-rotated")
+	newKey, err := db.CreateAPIKey(name + "-rotated")
+	if err != nil {
+		return "", fmt.Errorf("failed to create new key: %w", err)
+	}
+
+	return newKey, nil
+}
+
+// DeleteExpiredAPIKeys removes API keys that have passed their expiration
+func (db *DB) DeleteExpiredAPIKeys() (int64, error) {
+	result, err := db.conn.Exec(`DELETE FROM api_keys WHERE expires_at IS NOT NULL AND expires_at < datetime('now')`)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 // ListAPIKeys returns all API keys
 func (db *DB) ListAPIKeys() ([]APIKey, error) {
-	query := `SELECT key, name, created_at FROM api_keys ORDER BY created_at DESC`
+	query := `SELECT key, name, created_at, expires_at, last_used FROM api_keys ORDER BY created_at DESC`
 	rows, err := db.conn.Query(query)
 	if err != nil {
 		return nil, err
@@ -216,12 +307,109 @@ func (db *DB) ListAPIKeys() ([]APIKey, error) {
 	var keys []APIKey
 	for rows.Next() {
 		var k APIKey
-		if err := rows.Scan(&k.Key, &k.Name, &k.CreatedAt); err != nil {
+		if err := rows.Scan(&k.Key, &k.Name, &k.CreatedAt, &k.ExpiresAt, &k.LastUsed); err != nil {
 			return nil, err
 		}
 		keys = append(keys, k)
 	}
 	return keys, rows.Err()
+}
+
+// ========== User Management ==========
+
+// CreateUser creates a new user from Firebase Auth data
+func (db *DB) CreateUser(firebaseUID, email, name, role string) (*User, error) {
+	id := generateUserID()
+	query := `INSERT INTO users (id, firebase_uid, email, name, role) VALUES (?, ?, ?, ?, ?)`
+	_, err := db.conn.Exec(query, id, firebaseUID, email, name, role)
+	if err != nil {
+		return nil, err
+	}
+	return &User{
+		ID:          id,
+		FirebaseUID: firebaseUID,
+		Email:       email,
+		Name:        name,
+		Role:        role,
+	}, nil
+}
+
+// generateUserID creates a new user ID
+func generateUserID() string {
+	bytes := make([]byte, 8)
+	rand.Read(bytes)
+	return "usr_" + hex.EncodeToString(bytes)
+}
+
+// GetUserByFirebaseUID retrieves a user by their Firebase UID
+func (db *DB) GetUserByFirebaseUID(firebaseUID string) (*User, error) {
+	query := `SELECT id, firebase_uid, email, name, role, created_at FROM users WHERE firebase_uid = ?`
+	row := db.conn.QueryRow(query, firebaseUID)
+
+	user := &User{}
+	err := row.Scan(&user.ID, &user.FirebaseUID, &user.Email, &user.Name, &user.Role, &user.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return user, nil
+}
+
+// GetUserByEmail retrieves a user by their email
+func (db *DB) GetUserByEmail(email string) (*User, error) {
+	query := `SELECT id, firebase_uid, email, name, role, created_at FROM users WHERE email = ?`
+	row := db.conn.QueryRow(query, email)
+
+	user := &User{}
+	err := row.Scan(&user.ID, &user.FirebaseUID, &user.Email, &user.Name, &user.Role, &user.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return user, nil
+}
+
+// GetOrCreateUser gets a user by Firebase UID or creates one if not exists
+func (db *DB) GetOrCreateUser(firebaseUID, email, name string) (*User, error) {
+	user, err := db.GetUserByFirebaseUID(firebaseUID)
+	if err != nil {
+		return nil, err
+	}
+	if user != nil {
+		return user, nil
+	}
+	return db.CreateUser(firebaseUID, email, name, "user")
+}
+
+// GetAgentsByOwner returns agents owned by a specific user
+func (db *DB) GetAgentsByOwner(ownerID string) ([]Agent, error) {
+	query := `SELECT id, last_seen, version, owner_id FROM agents WHERE owner_id = ?`
+	rows, err := db.conn.Query(query, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var agents []Agent
+	for rows.Next() {
+		var a Agent
+		if err := rows.Scan(&a.ID, &a.LastSeen, &a.Version, &a.OwnerID); err != nil {
+			return nil, err
+		}
+		agents = append(agents, a)
+	}
+	return agents, rows.Err()
+}
+
+// SetAgentOwner assigns an agent to a user
+func (db *DB) SetAgentOwner(agentID, ownerID string) error {
+	query := `UPDATE agents SET owner_id = ? WHERE id = ?`
+	_, err := db.conn.Exec(query, ownerID, agentID)
+	return err
 }
 
 // GetAgentCount returns the total number of registered agents

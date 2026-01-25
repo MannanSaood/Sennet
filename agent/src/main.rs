@@ -16,6 +16,9 @@ mod init;
 mod trace;
 mod k8s;
 mod flows;
+mod crypto;
+mod btf;
+mod docker;
 
 use anyhow::Result;
 use tracing::{info, error, warn};

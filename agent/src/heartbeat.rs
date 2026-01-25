@@ -5,11 +5,12 @@
 use anyhow::Result;
 use backoff::ExponentialBackoff;
 use std::time::{Duration, Instant};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::client::{Command, HeartbeatRequest, MetricsSummary, SentinelClient};
 use crate::config::Config;
 use crate::identity::IdentityManager;
+use crate::upgrade::Updater;
 
 // Linux-only: imports for reading eBPF metrics from pinned maps
 #[cfg(target_os = "linux")]
@@ -165,8 +166,34 @@ impl HeartbeatLoop {
             }
             Command::CommandUpgrade => {
                 info!("Upgrade available: {} -> {}", self.identity.version(), latest_version);
-                // TODO: Implement self-update
-                warn!("Self-update not yet implemented");
+                // Perform self-update
+                match Updater::new() {
+                    Ok(updater) => {
+                        match updater.upgrade() {
+                            Ok(()) => {
+                                info!("Upgrade successful! Restarting...");
+                                // Exec into new binary to restart
+                                #[cfg(unix)]
+                                {
+                                    use std::os::unix::process::CommandExt;
+                                    let exe = std::env::current_exe().unwrap();
+                                    let err = std::process::Command::new(exe).exec();
+                                    error!("Failed to exec after upgrade: {}", err);
+                                }
+                                #[cfg(not(unix))]
+                                {
+                                    warn!("Upgrade complete. Please restart the agent manually.");
+                                }
+                            }
+                            Err(e) => {
+                                error!("Upgrade failed: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to initialize updater: {}", e);
+                    }
+                }
             }
             Command::CommandReconfigure => {
                 info!("Reconfiguration requested");

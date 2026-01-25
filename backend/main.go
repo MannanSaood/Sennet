@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/sennet/sennet/backend/auth"
 	"github.com/sennet/sennet/backend/cloud"
 	"github.com/sennet/sennet/backend/db"
 	"github.com/sennet/sennet/backend/handler"
@@ -108,6 +109,21 @@ func runServer(port, dbPath, latestVersion string) {
 		log.Printf("  No INIT_API_KEY environment variable set")
 	}
 
+	// Initialize Firebase Auth (optional - for dashboard users)
+	var firebaseAuth *auth.FirebaseAuth
+	if os.Getenv("FIREBASE_SERVICE_ACCOUNT_JSON") != "" || os.Getenv("FIREBASE_SERVICE_ACCOUNT_PATH") != "" {
+		fa, err := auth.NewFirebaseAuth()
+		if err != nil {
+			log.Printf("Warning: Firebase Auth failed to initialize: %v", err)
+			log.Printf("  Dashboard will use API key authentication")
+		} else {
+			firebaseAuth = fa
+			log.Printf("  Firebase Auth: enabled")
+		}
+	} else {
+		log.Printf("  Firebase Auth: disabled (no service account configured)")
+	}
+
 	// Create handler
 	sentinelHandler := handler.NewSentinelHandler(database, latestVersion)
 
@@ -145,6 +161,7 @@ func runServer(port, dbPath, latestVersion string) {
 	// Initialize middleware
 	rateLimiter := middleware.NewRateLimiter(100, 20) // 100 req/min, burst 20
 	loggingMiddleware := middleware.NewLoggingMiddleware(log.Default())
+	corsMiddleware := middleware.CORS(middleware.DefaultCORSConfig())
 
 	// Setup routes
 	mux := http.NewServeMux()
@@ -176,17 +193,38 @@ func runServer(port, dbPath, latestVersion string) {
 	mux.Handle("/api/sync-costs", authWrapper(http.HandlerFunc(costHandler.HandleSyncCosts)))
 	log.Printf("  Cost API endpoints: /api/costs, /api/clouds, /api/recommendations")
 
-	// Dashboard endpoints (no auth - public dashboard)
+	// Dashboard endpoints (stats requires auth, dashboard is public)
 	statsHandler := handler.NewStatsHandler(database)
-	mux.HandleFunc("/api/stats", statsHandler.HandleStats)
+
+	// Use Firebase auth for dashboard if available, otherwise API key
+	var dashboardAuthWrapper func(http.Handler) http.Handler
+	if firebaseAuth != nil {
+		dashboardAuthWrapper = auth.FirebaseMiddleware(firebaseAuth)
+		log.Printf("  Dashboard auth: Firebase")
+	} else {
+		dashboardAuthWrapper = authWrapper
+		log.Printf("  Dashboard auth: API Key")
+	}
+
+	// Create key handler
+	keyHandler := handler.NewKeyHandler(database)
+	mux.Handle("/api/keys", dashboardAuthWrapper(http.HandlerFunc(keyHandler.HandleGetKeys)))
+	mux.Handle("/api/keys/create", dashboardAuthWrapper(http.HandlerFunc(keyHandler.HandleCreateKey)))
+	log.Printf("  Key API endpoints: /api/keys, /api/keys/create")
+
+	mux.Handle("/api/stats", dashboardAuthWrapper(http.HandlerFunc(statsHandler.HandleStats)))
 	mux.HandleFunc("/dashboard", serveDashboard)
 	mux.HandleFunc("/dashboard/", serveDashboard)
 	log.Printf("  Dashboard: http://localhost:%s/dashboard", port)
 
-	// Wrap mux with middleware chain: logging -> rate limiting -> mux
+	// Wrap mux with middleware chain: Security Heads -> Audit -> Signature -> CORS -> logging -> rate limiting -> mux
 	var finalHandler http.Handler = mux
 	finalHandler = rateLimiter.Middleware(finalHandler)
 	finalHandler = loggingMiddleware.Middleware(finalHandler)
+	finalHandler = corsMiddleware(finalHandler)
+	finalHandler = middleware.SignatureMiddleware(database)(finalHandler)
+	finalHandler = middleware.AuditMiddleware(middleware.DefaultAuditLogger())(finalHandler)
+	finalHandler = middleware.SecurityHeaders()(finalHandler)
 
 	// Create server
 	server := &http.Server{

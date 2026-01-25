@@ -77,11 +77,24 @@ impl SentinelClient {
     /// Send a heartbeat to the control plane
     pub fn heartbeat(&self, request: &HeartbeatRequest) -> Result<HeartbeatResponse> {
         let url = format!("{}/sentinel.v1.SentinelService/Heartbeat", self.base_url);
+        
+        // Serialize request body for signing
+        let body = serde_json::to_vec(request)
+            .context("Failed to serialize request")?;
+        
+        // Generate timestamp and signature
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let signature = crate::crypto::sign_request(&self.api_key, timestamp, &body);
 
         let response = ureq::post(&url)
             .set("Authorization", &format!("Bearer {}", self.api_key))
             .set("Content-Type", "application/json")
-            .send_json(request)
+            .set("X-Sennet-Timestamp", &timestamp.to_string())
+            .set("X-Sennet-Signature", &signature)
+            .send_bytes(&body)
             .context("Failed to send heartbeat request")?;
 
         let resp: HeartbeatResponse = response

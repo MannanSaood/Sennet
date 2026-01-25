@@ -38,8 +38,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 anyhow = "1"
 thiserror = "1"
 
-# Cryptographic hashing (for upgrade checksum verification)
+# Cryptographic hashing (for upgrade checksum verification and request signing)
 sha2 = "0.10"
+hmac = "0.12"
 hex = "0.4"
 
 # Kubernetes API client (Phase 7)

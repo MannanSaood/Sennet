@@ -1,0 +1,41 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+@theme {
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", monospace;
+
+  --color-accent: #00D4FF;
+  --color-accent-alt: #8B5CF6;
+  --color-success: #10B981;
+  --color-warning: #F59E0B;
+  --color-error: #EF4444;
+
+  --color-dark-bg: #0A0F1C;
+  --color-dark-surface: #111827;
+  --color-dark-border: #1F2937;
+
+  --color-text-primary: #F9FAFB;
+  --color-text-secondary: #9CA3AF;
+}
+
+:root {
+  color-scheme: dark;
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply bg-dark-bg text-text-primary font-sans antialiased tracking-tight;
+  font-feature-settings: "cv11", "ss01";
+  background-color: var(--color-dark-bg);
+  color: var(--color-text-primary);
+}
+
+/* Glassmorphism utilities */
+.glass {
+  @apply bg-dark-surface/50 backdrop-blur-lg border border-dark-border/50;
+}
+
+.glass-hover {
+  @apply hover:bg-dark-surface/70 transition-colors duration-200;
+}
