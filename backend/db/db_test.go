@@ -27,63 +27,6 @@ func setupTestDB(t *testing.T) (*db.DB, func()) {
 	return database, cleanup
 }
 
-func TestDB_CreateAPIKey(t *testing.T) {
-	database, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	key, err := database.CreateAPIKey("Test Key")
-	if err != nil {
-		t.Fatalf("Failed to create API key: %v", err)
-	}
-
-	// Key should have sk_ prefix
-	if len(key) < 35 || key[:3] != "sk_" {
-		t.Errorf("Expected key with sk_ prefix, got: %s", key)
-	}
-}
-
-func TestDB_ValidateAPIKey_Valid(t *testing.T) {
-	database, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	key, _ := database.CreateAPIKey("Test Key")
-
-	valid, err := database.ValidateAPIKey(key)
-	if err != nil {
-		t.Fatalf("Validation error: %v", err)
-	}
-	if !valid {
-		t.Error("Expected valid key to return true")
-	}
-}
-
-func TestDB_ValidateAPIKey_Invalid(t *testing.T) {
-	database, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	valid, err := database.ValidateAPIKey("sk_invalid_key_12345")
-	if err != nil {
-		t.Fatalf("Validation error: %v", err)
-	}
-	if valid {
-		t.Error("Expected invalid key to return false")
-	}
-}
-
-func TestDB_ValidateAPIKey_BadFormat(t *testing.T) {
-	database, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	// Key without sk_ prefix
-	valid, err := database.ValidateAPIKey("not_valid_format")
-	if err != nil {
-		t.Fatalf("Validation error: %v", err)
-	}
-	if valid {
-		t.Error("Expected malformed key to return false")
-	}
-}
-
 func TestDB_CreateOrUpdateAgent(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -191,23 +134,5 @@ func TestDB_GetAgentCount(t *testing.T) {
 	count, _ = database.GetAgentCount()
 	if count != 2 {
 		t.Errorf("Expected 2 agents, got %d", count)
-	}
-}
-
-func TestDB_ListAPIKeys(t *testing.T) {
-	database, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	// Create some keys
-	database.CreateAPIKey("Key 1")
-	database.CreateAPIKey("Key 2")
-
-	keys, err := database.ListAPIKeys()
-	if err != nil {
-		t.Fatalf("Failed to list keys: %v", err)
-	}
-
-	if len(keys) != 2 {
-		t.Errorf("Expected 2 keys, got %d", len(keys))
 	}
 }

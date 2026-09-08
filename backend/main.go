@@ -56,16 +56,25 @@ func archive() platform.Archive {
 	}
 	return nil
 }
-func seed(ctx context.Context, store *platform.Store) {
-	if key := os.Getenv("INIT_API_KEY"); key != "" {
-		if err := store.Seed(ctx, key, env("SENNET_BOOTSTRAP_TENANT", "local")); err != nil {
-			log.Fatal(err)
-		}
-	}
-}
 func configureIdentity(api *platform.API) {
-	if os.Getenv("FIREBASE_SERVICE_ACCOUNT_JSON") == "" && os.Getenv("FIREBASE_SERVICE_ACCOUNT_PATH") == "" {
+	if env("SENNET_AUTH_MODE", "firebase") == "development" {
+		if os.Getenv("SENNET_ENV") == "production" {
+			log.Fatal("development login sessions are forbidden in production")
+		}
+		token := os.Getenv("SENNET_DEVELOPMENT_SESSION_TOKEN")
+		if len(token) < 24 {
+			log.Fatal("development auth requires SENNET_DEVELOPMENT_SESSION_TOKEN with at least 24 characters")
+		}
+		api.Resolve = func(_ context.Context, candidate string) (platform.Principal, error) {
+			if subtle.ConstantTimeCompare([]byte(candidate), []byte(token)) != 1 {
+				return platform.Principal{}, errors.New("invalid development login session")
+			}
+			return platform.Principal{Tenant: env("SENNET_DEVELOPMENT_TENANT", "local"), Subject: "development-login", Role: "admin"}, nil
+		}
 		return
+	}
+	if env("SENNET_AUTH_MODE", "firebase") != "firebase" {
+		log.Fatal("SENNET_AUTH_MODE must be firebase or development")
 	}
 	fa, err := auth.NewFirebaseAuth()
 	if err != nil {
@@ -76,7 +85,15 @@ func configureIdentity(api *platform.API) {
 		if err != nil {
 			return platform.Principal{}, err
 		}
-		return platform.Principal{Tenant: "firebase:" + verified.UID, Subject: verified.UID, Role: "admin"}, nil
+		tenant := "user:" + verified.UID
+		if claimed, ok := verified.Claims["tenant_id"].(string); ok && claimed != "" {
+			tenant = "tenant:" + claimed
+		}
+		role := "admin"
+		if claimed, ok := verified.Claims["role"].(string); ok && (claimed == "admin" || claimed == "reader" || claimed == "ingest") {
+			role = claimed
+		}
+		return platform.Principal{Tenant: tenant, Subject: "firebase:" + verified.UID, Role: role}, nil
 	}
 }
 
@@ -206,7 +223,6 @@ func runGateway(ctx context.Context, dbPath string, metrics *platform.DataPlaneM
 		log.Fatal("metadata store unavailable: ", err)
 	}
 	defer store.Close()
-	seed(ctx, store)
 	producer := platform.NewKafkaProducer(cfg, metrics)
 	defer producer.Close()
 	ingest := platform.NewBoundedIngestor(producer, envInt("SENNET_INGEST_CONCURRENCY", 64), metrics)
@@ -230,7 +246,6 @@ func runQuery(ctx context.Context, dbPath string, metrics *platform.DataPlaneMet
 		log.Fatal("metadata store unavailable: ", err)
 	}
 	defer store.Close()
-	seed(ctx, store)
 	if err = ch.Init(ctx); err != nil {
 		log.Fatal(err)
 	}
@@ -296,7 +311,6 @@ func runAll(ctx context.Context, dbPath string, metrics *platform.DataPlaneMetri
 		log.Fatal("metadata store unavailable: ", err)
 	}
 	defer store.Close()
-	seed(ctx, store)
 	var telemetry platform.Telemetry = store
 	var ingest platform.Ingestor = store
 	mode := "local"

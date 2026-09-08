@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
-	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -33,16 +32,6 @@ type Agent struct {
 	LastSeen time.Time
 	Version  string
 	OwnerID  *string // Owner user ID for multi-tenancy
-}
-
-// APIKey represents an API key in the database
-type APIKey struct {
-	Key       string
-	Name      string
-	CreatedAt time.Time
-	ExpiresAt *time.Time // nil means never expires
-	LastUsed  *time.Time // nil means never used
-	UserID    *string    // Owner user ID
 }
 
 // New creates a new database connection and initializes schema
@@ -89,15 +78,6 @@ func (db *DB) migrate() error {
 		last_seen TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		version TEXT NOT NULL DEFAULT '',
 		owner_id TEXT REFERENCES users(id)
-	);
-
-	CREATE TABLE IF NOT EXISTS api_keys (
-		key TEXT PRIMARY KEY,
-		name TEXT NOT NULL,
-		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		expires_at TIMESTAMP,
-		last_used TIMESTAMP,
-		user_id TEXT REFERENCES users(id)
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_agents_last_seen ON agents(last_seen);
@@ -187,132 +167,6 @@ func (db *DB) GetAgent(agentID string) (*Agent, error) {
 		return nil, err
 	}
 	return agent, nil
-}
-
-// CreateAPIKey generates and stores a new API key
-func (db *DB) CreateAPIKey(name string) (string, error) {
-	// Generate random key: sk_<32 hex chars>
-	bytes := make([]byte, 16)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", fmt.Errorf("failed to generate random key: %w", err)
-	}
-	key := "sk_" + hex.EncodeToString(bytes)
-
-	query := `INSERT INTO api_keys (key, name, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)`
-	_, err := db.conn.Exec(query, key, name)
-	if err != nil {
-		return "", err
-	}
-
-	return key, nil
-}
-
-// EnsureAPIKey ensures a specific API key exists (for seeding from environment)
-func (db *DB) EnsureAPIKey(key, name string) error {
-	query := `INSERT OR IGNORE INTO api_keys (key, name, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)`
-	_, err := db.conn.Exec(query, key, name)
-	return err
-}
-
-// ValidateAPIKey checks if an API key exists and is valid
-func (db *DB) ValidateAPIKey(key string) (bool, error) {
-	// Basic format check
-	if !strings.HasPrefix(key, "sk_") {
-		return false, nil
-	}
-
-	query := `SELECT 1 FROM api_keys WHERE key = ? AND (expires_at IS NULL OR expires_at > datetime('now'))`
-	row := db.conn.QueryRow(query, key)
-
-	var exists int
-	err := row.Scan(&exists)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-// APIKeyExists checks if an API key exists (for signature verification)
-func (db *DB) APIKeyExists(key string) (bool, error) {
-	query := `SELECT 1 FROM api_keys WHERE key = ? AND (expires_at IS NULL OR expires_at > datetime('now'))`
-	row := db.conn.QueryRow(query, key)
-
-	var exists int
-	err := row.Scan(&exists)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-// UpdateAPIKeyLastUsed updates the last_used timestamp for an API key
-func (db *DB) UpdateAPIKeyLastUsed(key string) error {
-	query := `UPDATE api_keys SET last_used = CURRENT_TIMESTAMP WHERE key = ?`
-	_, err := db.conn.Exec(query, key)
-	return err
-}
-
-// RotateAPIKey creates a new API key and marks the old one as expiring in 24 hours
-// Returns the new API key
-func (db *DB) RotateAPIKey(oldKey string) (string, error) {
-	// Get the name of the old key
-	var name string
-	err := db.conn.QueryRow(`SELECT name FROM api_keys WHERE key = ?`, oldKey).Scan(&name)
-	if err != nil {
-		return "", fmt.Errorf("old key not found: %w", err)
-	}
-
-	// Mark old key to expire in 24 hours (grace period for agent updates)
-	_, err = db.conn.Exec(
-		`UPDATE api_keys SET expires_at = datetime('now', '+1 day') WHERE key = ?`,
-		oldKey,
-	)
-	if err != nil {
-		return "", fmt.Errorf("failed to set expiration on old key: %w", err)
-	}
-
-	// Create new key with same name (appending "-rotated")
-	newKey, err := db.CreateAPIKey(name + "-rotated")
-	if err != nil {
-		return "", fmt.Errorf("failed to create new key: %w", err)
-	}
-
-	return newKey, nil
-}
-
-// DeleteExpiredAPIKeys removes API keys that have passed their expiration
-func (db *DB) DeleteExpiredAPIKeys() (int64, error) {
-	result, err := db.conn.Exec(`DELETE FROM api_keys WHERE expires_at IS NOT NULL AND expires_at < datetime('now')`)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-// ListAPIKeys returns all API keys
-func (db *DB) ListAPIKeys() ([]APIKey, error) {
-	query := `SELECT key, name, created_at, expires_at, last_used FROM api_keys ORDER BY created_at DESC`
-	rows, err := db.conn.Query(query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var keys []APIKey
-	for rows.Next() {
-		var k APIKey
-		if err := rows.Scan(&k.Key, &k.Name, &k.CreatedAt, &k.ExpiresAt, &k.LastUsed); err != nil {
-			return nil, err
-		}
-		keys = append(keys, k)
-	}
-	return keys, rows.Err()
 }
 
 // ========== User Management ==========

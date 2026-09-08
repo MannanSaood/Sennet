@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: storage-consumer
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: sennet, role: storage-consumer}}
+  template:
+    metadata: {labels: {app: sennet, role: storage-consumer}}
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: storage-consumer
+          image: sennet/backend
+          imagePullPolicy: IfNotPresent
+          ports: [{name: operator, containerPort: 8080}]
+          env:
+            - {name: SENNET_ENV, value: production}
+            - {name: SENNET_ROLE, value: storage-consumer}
+            - {name: SENNET_BIND, value: 0.0.0.0}
+            - {name: SENNET_KAFKA_TOPIC, value: sennet-events}
+            - {name: SENNET_KAFKA_DLQ_TOPIC, value: sennet-events-dead-letter}
+            - {name: SENNET_KAFKA_GROUP, value: sennet-storage-v1}
+            - {name: SENNET_CLICKHOUSE_INIT, value: none}
+            - {name: SENNET_KAFKA_BROKERS, valueFrom: {secretKeyRef: {name: sennet-data-plane, key: kafka-brokers}}}
+            - {name: SENNET_CLICKHOUSE_URL, valueFrom: {secretKeyRef: {name: sennet-data-plane, key: clickhouse-url}}}
+            - {name: SENNET_CLICKHOUSE_USER, valueFrom: {secretKeyRef: {name: sennet-data-plane, key: clickhouse-user}}}
+            - {name: SENNET_CLICKHOUSE_PASSWORD, valueFrom: {secretKeyRef: {name: sennet-data-plane, key: clickhouse-password}}}
+            - {name: SENNET_OPERATOR_TOKEN, valueFrom: {secretKeyRef: {name: sennet-data-plane, key: operator-token}}}
+          readinessProbe: {httpGet: {path: /ready, port: operator}, periodSeconds: 5, failureThreshold: 3}
+          livenessProbe: {httpGet: {path: /live, port: operator}, periodSeconds: 10, failureThreshold: 3}
+          resources:
+            requests: {cpu: 200m, memory: 256Mi}
+            limits: {cpu: '2', memory: 1Gi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: storage-consumer}
+spec:
+  selector: {app: sennet, role: storage-consumer}
+  ports: [{name: operator, port: 8080, targetPort: operator}]

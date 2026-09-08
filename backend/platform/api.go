@@ -5,9 +5,6 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -126,11 +123,15 @@ func (a *API) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 		w.Header().Set("Vary", "Origin")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Sennet-Signature, X-Sennet-Timestamp")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 	}
 	if r.Method == "OPTIONS" {
 		w.WriteHeader(204)
+		return
+	}
+	if r.Header.Get("X-Sennet-Signature") != "" || r.Header.Get("X-Sennet-Timestamp") != "" {
+		problem(w, 400, "legacy API-key signing is not supported")
 		return
 	}
 	if r.URL.Path == "/live" {
@@ -185,11 +186,11 @@ func (a *API) serve(w http.ResponseWriter, r *http.Request) {
 		problem(w, 401, "bearer credential required")
 		return
 	}
-	token := parts[1]
-	p, err := a.Store.Authenticate(r.Context(), token)
-	if err != nil && a.Resolve != nil && !strings.HasPrefix(token, "sk_") {
-		p, err = a.Resolve(r.Context(), token)
+	if a.Resolve == nil {
+		problem(w, 503, "login verification unavailable")
+		return
 	}
+	p, err := a.Resolve(r.Context(), parts[1])
 	if err != nil || p.Tenant == "" || !validRole(p.Role) {
 		problem(w, 401, "invalid or expired credential")
 		return
@@ -220,25 +221,6 @@ func (a *API) serve(w http.ResponseWriter, r *http.Request) {
 		if e != nil || len(b) > 4<<20 {
 			problem(w, 413, "body exceeds 4 MiB")
 			return
-		}
-		sig, ts := r.Header.Get("X-Sennet-Signature"), r.Header.Get("X-Sennet-Timestamp")
-		if sig != "" || ts != "" {
-			stamp, e := strconv.ParseInt(ts, 10, 64)
-			now := time.Now().Unix()
-			if e != nil || stamp < now-300 || stamp > now+300 || sig == "" {
-				problem(w, 401, "invalid signing headers")
-				return
-			}
-			mac := hmac.New(sha256.New, []byte(token))
-			var timeBytes [8]byte
-			binary.LittleEndian.PutUint64(timeBytes[:], uint64(stamp))
-			mac.Write(timeBytes[:])
-			mac.Write(b)
-			given, e := hex.DecodeString(sig)
-			if e != nil || !hmac.Equal(mac.Sum(nil), given) {
-				problem(w, 401, "invalid signature")
-				return
-			}
 		}
 		r.Body = io.NopCloser(bytes.NewReader(b))
 	}
@@ -286,8 +268,6 @@ func (a *API) serve(w http.ResponseWriter, r *http.Request) {
 		respond(w, 200, p)
 	case "/api/capabilities":
 		respond(w, 200, map[string]any{"mode": a.Mode, "signals": signals, "retention_days": 30, "max_query_rows": 1000, "cloud_integrations": false, "team_management": false, "billing": false})
-	case "/api/keys", "/api/keys/create":
-		a.keys(w, r)
 	case "/api/agents":
 		if r.Method != "GET" {
 			problem(w, 405, "GET required")
@@ -436,46 +416,6 @@ func (a *API) query(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond(w, 200, page)
-}
-func (a *API) keys(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	if p.Role != "admin" {
-		problem(w, 403, "admin required")
-		return
-	}
-	switch r.Method {
-	case "GET":
-		keys, err := a.Store.Keys(r.Context(), p)
-		if err != nil {
-			problem(w, 503, "key store unavailable")
-			return
-		}
-		respond(w, 200, keys)
-	case "POST":
-		var req struct {
-			Name    string `json:"name"`
-			Role    string `json:"role"`
-			Expires int64  `json:"expires"`
-		}
-		if err := decode(r, &req); err != nil {
-			problem(w, 400, "invalid key request")
-			return
-		}
-		k, secret, err := a.Store.CreateKey(r.Context(), p, req.Name, req.Role, req.Expires)
-		if err != nil {
-			problem(w, 400, "valid name, role and future expiry required")
-			return
-		}
-		respond(w, 201, map[string]any{"metadata": k, "key": secret})
-	case "DELETE":
-		if err := a.Store.Revoke(r.Context(), p, r.URL.Query().Get("id")); err != nil {
-			problem(w, 404, "key not found")
-			return
-		}
-		w.WriteHeader(204)
-	default:
-		problem(w, 405, "method not allowed")
-	}
 }
 func (a *API) heartbeat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {

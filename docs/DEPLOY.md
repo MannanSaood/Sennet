@@ -19,10 +19,18 @@ The binary has four explicit roles. `SENNET_ROLE=gateway` serves authenticated H
 | `SENNET_CLICKHOUSE_INIT` | consumer, query | `local` creates evaluation DDL; production must use pre-provisioned `none` |
 | `SENNET_ARCHIVE_DIR` | consumer | Optional idempotent local filesystem archive for testing/evaluation |
 | `SENNET_OPERATOR_TOKEN` | all | Bearer token for `/internal/metrics`; never expose it to browsers |
-| `INIT_API_KEY` / `SENNET_BOOTSTRAP_TENANT` | gateway, query, all | Bootstrap credential and its explicit tenant |
+| `SENNET_AUTH_MODE` | HTTP roles | `firebase` in production; `development` is allowed only outside production |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` / `FIREBASE_SERVICE_ACCOUNT_PATH` | HTTP roles | Firebase Admin credentials used to verify login ID tokens; application-default credentials are also supported |
+| `SENNET_DEVELOPMENT_SESSION_TOKEN` / `SENNET_DEVELOPMENT_TENANT` | local evaluation | Fixed local login session and tenant for self-contained tests; forbidden when `SENNET_ENV=production` |
 | `SENNET_ALLOWED_ORIGINS` | HTTP roles | Exact browser origins; no wildcard |
 
-`SENNET_ENV=production` rejects SQLite, missing role dependencies, and automatic local ClickHouse schema creation. TLS termination is mandatory outside loopback. Secrets belong in a secret manager.
+`SENNET_ENV=production` rejects SQLite, development login sessions, missing role dependencies, and automatic local ClickHouse schema creation. TLS termination is mandatory outside loopback. Secrets belong in a secret manager.
+
+## Login and tenant identity
+
+Sennet does not issue, list, rotate, or accept user-managed API keys. Users sign in through Firebase Authentication and send the resulting short-lived ID token as the bearer credential. The server verifies that token on every request. A `tenant_id` custom claim selects a shared tenant; otherwise the stable Firebase UID receives a personal tenant. The optional `role` claim may be `admin`, `reader`, or `ingest`; a personal login defaults to administrator of its own tenant.
+
+Gateway and query/control startup fails if Firebase verification cannot initialize. The `development` auth mode is solely for the local Compose/evaluation stack and is rejected in production. `X-Sennet-Signature` and `X-Sennet-Timestamp` are retired API-key-era headers and requests containing either are rejected.
 
 ## Kafka contract
 
@@ -48,10 +56,10 @@ The `Archive` interface receives raw source records before offset commit. `FileA
 
 Poison reasons are `invalid_json`, `missing_tenant`, `invalid_event`, and `record_too_large`. The consumer publishes the dead-letter envelope with `acks=all` before committing the source offset. Original values over half the source batch byte bound are omitted and marked non-replayable.
 
-An admin credential can inspect `GET /api/dead-letter?limit=100` on query/control. Correct a record and replay with:
+An administrator's current login session can inspect `GET /api/dead-letter?limit=100` on query/control. Correct a record and replay with:
 
 ```text
-sennet-replay -url http://query-control:8080 -token "$SENNET_API_KEY" -id <dead-letter-id> -event corrected-event.json
+sennet-replay -url http://query-control:8080 -session-token "$SENNET_SESSION_TOKEN" -id <dead-letter-id> -event corrected-event.json
 ```
 
 The correction must preserve a known original event ID, event timestamp, and gateway-derived tenant. Repeating replay can append more than once to Kafka, but ClickHouse/SQLite storage remains idempotent by tenant and immutable ID. Replay is at-least-once, not exactly-once.
@@ -67,7 +75,7 @@ Gateway queue saturation returns 429 with `Retry-After: 1`; failed/ambiguous bro
 1. Provision PostgreSQL, source/dead-letter topics, and ClickHouse DDL before starting roles.
 2. Deploy query/control and validate tenant-scoped reads against a shadow ClickHouse table.
 3. Deploy the storage consumer with a new consumer group; verify archive objects, duplicate collapse, lag, and poison handling.
-4. Deploy the gateway, issue new ingest credentials, and send HTTP plus OTLP fixtures.
+4. Configure Firebase login verification on gateway/query roles, sign in, and send HTTP plus OTLP fixtures with the login ID token.
 5. Retry an intentionally ambiguous request with identical IDs and compare Kafka, archive, and ClickHouse counts.
 6. Switch ingestion, retain rollback routing, and keep the previous databases read-only until restore/replay drills pass.
 
@@ -75,4 +83,4 @@ Do not point production telemetry at SQLite. Changing an ID's timestamp creates 
 
 ## Recovery gates
 
-Test consumer termination after analytics append but before offset commit, broker replica loss, ClickHouse/archive unavailability, dead-letter outage, credential expiry, full archive volume, replay, backup restore, and retention exhaustion. Docker Compose is a single-node smoke topology. Multi-broker Kafka, ClickHouse Keeper/replicas, sustained load, backup restore, and failure-domain tests remain required before any availability claim.
+Test consumer termination after analytics append but before offset commit, broker replica loss, ClickHouse/archive unavailability, dead-letter outage, login-session expiry/revocation, full archive volume, replay, backup restore, and retention exhaustion. Docker Compose is a single-node smoke topology. Multi-broker Kafka, ClickHouse Keeper/replicas, sustained load, backup restore, and failure-domain tests remain required before any availability claim.

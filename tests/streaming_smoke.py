@@ -1,7 +1,7 @@
 """Verify actual asynchronous indexing, tenant scope, and complete-window counts."""
 import json,os,time,urllib.request
 base=os.environ.get('SENNET_QUERY_URL',os.environ.get('SENNET_URL','http://127.0.0.1:8080'))
-headers={'Authorization':'Bearer '+os.environ['SENNET_API_KEY']}
+headers={'Authorization':'Bearer '+os.environ['SENNET_SESSION_TOKEN']}
 def query(path):
     with urllib.request.urlopen(urllib.request.Request(base+path,headers=headers),timeout=20) as r: return json.load(r)
 for attempt in range(30):

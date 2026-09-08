@@ -1,9 +1,52 @@
-import { useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '@/api/client';
 import { useAuth } from '@/hooks/useAuth';
 import { DashboardLayout } from '@/components/dashboard/DashboardLayout';
-interface Key {id:string;name:string;role:string;prefix:string;created:number;expires:number}
-interface View {id:string;name:string;path:string;range:string;signal:string;search:string;service:string}
-export function SettingsPage(){const {user}=useAuth();const cache=useQueryClient();const [name,setName]=useState('');const [role,setRole]=useState('ingest');const [secret,setSecret]=useState('');const [message,setMessage]=useState('');const [busy,setBusy]=useState(false);const admin=user?.role==='admin';const keys=useQuery({queryKey:['keys',user?.tenant],enabled:admin,queryFn:async()=>(await api.get<Key[]>('/api/keys')).data});const views=useQuery({queryKey:['views',user?.tenant],queryFn:async()=>(await api.get<View[]>('/api/dashboards')).data});async function create(){setBusy(true);setMessage('');try{const {data}=await api.post('/api/keys',{name,role,expires:Date.now()+90*86400000});setSecret(data.key);setName('');void cache.invalidateQueries({queryKey:['keys']});}catch{setMessage('Key creation failed. Check your permissions and connection.');}finally{setBusy(false);}}async function revoke(id:string){try{await api.delete('/api/keys',{params:{id}});void cache.invalidateQueries({queryKey:['keys']});}catch{setMessage('Revocation failed.');}}return <DashboardLayout><div className="page-heading"><div><p className="eyebrow">WORKSPACE</p><h1>Access & saved views</h1><p className="muted">Tenant: {user?.tenant}. Credentials are scoped and expire after 90 days.</p></div></div>{message&&<p role="alert" className="error-banner">{message}</p>}{secret&&<section className="notice secret-box"><h2>Copy this key now</h2><p>It will not be returned again. Store it in your secret manager.</p><code>{secret}</code><button onClick={()=>void navigator.clipboard.writeText(secret).then(()=>setMessage('Copied.')).catch(()=>setMessage('Copy failed; select the key manually.'))}>Copy key</button><button onClick={()=>setSecret('')}>I have saved it</button></section>}<section className="panel"><div className="panel-heading"><h2>Access keys</h2><span>{admin?'Administrator access':'Read-only workspace access'}</span></div>{admin&&<form className="inline-form" onSubmit={e=>{e.preventDefault();void create();}}><input aria-label="Key name" placeholder="Key name, e.g. production collectors" required maxLength={100} value={name} onChange={e=>setName(e.target.value)}/><select aria-label="Key scope" value={role} onChange={e=>setRole(e.target.value)}><option value="ingest">Ingestion only</option><option value="reader">Read only</option><option value="admin">Administrator</option></select><button className="primary" disabled={busy}>Create key</button></form>}{keys.isError?<p className="error-banner">Keys could not be loaded.</p>:<div className="table-scroll"><table><thead><tr><th>Name</th><th>Prefix</th><th>Scope</th><th>Expiry</th><th/></tr></thead><tbody>{keys.data?.map(k=><tr key={k.id}><td>{k.name}</td><td className="mono">{k.prefix}…</td><td>{k.role}</td><td>{k.expires?new Date(k.expires).toLocaleDateString():'Bootstrap key'}</td><td><button disabled={user?.id==='key:'+k.id} onClick={()=>void revoke(k.id)}>Revoke</button></td></tr>)}</tbody></table></div>}</section><section className="panel"><div className="panel-heading"><h2>Saved investigation views</h2></div>{views.isError?<p className="error-banner">Saved views unavailable.</p>:views.data?.length?<div className="saved-grid">{views.data.map(v=><Link key={v.id} to={`${v.path.startsWith('/dashboard')?v.path:'/dashboard'}?${new URLSearchParams({range:v.range||'3600000',search:v.search||'',service:v.service||''})}`}>{v.name} →</Link>)}</div>:<p className="empty">Use “Save view” from any explorer to return to an investigation.</p>}</section><p className="muted">Cloud billing connectors and shared-team administration are not enabled on this deployment. There are no simulated billing or notification settings.</p></DashboardLayout>}
+
+interface View {
+  id: string;
+  name: string;
+  path: string;
+  range: string;
+  signal: string;
+  search: string;
+  service: string;
+}
+
+export function SettingsPage() {
+  const { user } = useAuth();
+  const views = useQuery({
+    queryKey: ['views', user?.tenant],
+    queryFn: async () => (await api.get<View[]>('/api/dashboards')).data,
+  });
+
+  return (
+    <DashboardLayout>
+      <div className="page-heading">
+        <div>
+          <p className="eyebrow">WORKSPACE</p>
+          <h1>Account & saved views</h1>
+          <p className="muted">Tenant: {user?.tenant}. Access follows your signed-in account; there are no API keys to create or manage.</p>
+        </div>
+      </div>
+      <section className="panel">
+        <div className="panel-heading"><h2>Signed-in access</h2><span>{user?.role ?? 'member'}</span></div>
+        <p>Your short-lived login session authenticates dashboard, query, and ingestion requests automatically.</p>
+      </section>
+      <section className="panel">
+        <div className="panel-heading"><h2>Saved investigation views</h2></div>
+        {views.isError ? <p className="error-banner">Saved views unavailable.</p> : views.data?.length ? (
+          <div className="saved-grid">
+            {views.data.map((view) => (
+              <Link key={view.id} to={`${view.path.startsWith('/dashboard') ? view.path : '/dashboard'}?${new URLSearchParams({ range: view.range || '3600000', search: view.search || '', service: view.service || '' })}`}>
+                {view.name} →
+              </Link>
+            ))}
+          </div>
+        ) : <p className="empty">Use “Save view” from any explorer to return to an investigation.</p>}
+      </section>
+      <p className="muted">Cloud billing connectors and shared-team administration are not enabled on this deployment. There are no simulated billing or notification settings.</p>
+    </DashboardLayout>
+  );
+}

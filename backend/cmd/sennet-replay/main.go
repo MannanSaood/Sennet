@@ -16,12 +16,12 @@ import (
 
 func main() {
 	endpoint := flag.String("url", "http://127.0.0.1:8080", "query/control base URL")
-	token := flag.String("token", os.Getenv("SENNET_API_KEY"), "admin API key")
+	session := flag.String("session-token", os.Getenv("SENNET_SESSION_TOKEN"), "admin login ID/session token")
 	id := flag.String("id", "", "dead-letter record ID")
 	eventFile := flag.String("event", "", "optional corrected Event JSON file")
 	flag.Parse()
-	if *token == "" || *id == "" {
-		fmt.Fprintln(os.Stderr, "-token and -id are required")
+	if *session == "" || *id == "" {
+		fmt.Fprintln(os.Stderr, "-session-token and -id are required")
 		os.Exit(2)
 	}
 	request := struct {
@@ -44,7 +44,7 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	req.Header.Set("Authorization", "Bearer "+*token)
+	req.Header.Set("Authorization", "Bearer "+*session)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {

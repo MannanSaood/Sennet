@@ -14,6 +14,9 @@ x-backend: &backend
     SENNET_KAFKA_DLQ_TOPIC: sennet-events-dead-letter
     SENNET_KAFKA_GROUP: sennet-storage-v1
     SENNET_OPERATOR_TOKEN: ${SENNET_OPERATOR_TOKEN:?Set a random operator metrics token}
+    SENNET_AUTH_MODE: development
+    SENNET_DEVELOPMENT_SESSION_TOKEN: ${SENNET_DEVELOPMENT_SESSION_TOKEN:?Set a random local login session token}
+    SENNET_DEVELOPMENT_TENANT: local
 
 services:
   kafka-volume-init:
@@ -70,7 +73,6 @@ services:
     environment:
       <<: *backend-env
       SENNET_ROLE: gateway
-      INIT_API_KEY: ${INIT_API_KEY:?Set a random bootstrap key starting sk_}
       SENNET_ALLOWED_ORIGINS: http://localhost:8088
     ports: ['127.0.0.1:8080:8080']
     depends_on: {postgres: {condition: service_healthy}, kafka-init: {condition: service_completed_successfully}}
@@ -87,7 +89,6 @@ services:
     environment:
       <<: *backend-env
       SENNET_ROLE: query-control
-      INIT_API_KEY: ${INIT_API_KEY:?Set a random bootstrap key starting sk_}
       SENNET_ALLOWED_ORIGINS: http://localhost:8088
     ports: ['127.0.0.1:8082:8080']
     depends_on: {postgres: {condition: service_healthy}, kafka-init: {condition: service_completed_successfully}, clickhouse: {condition: service_healthy}}
@@ -99,7 +100,9 @@ services:
       SENNET_BIND: 0.0.0.0
       SENNET_DATABASE_URL: /data/sennet-platform.db
       SENNET_OPERATOR_TOKEN: ${SENNET_OPERATOR_TOKEN:?Set a random operator metrics token}
-      INIT_API_KEY: ${INIT_API_KEY:?Set a random bootstrap key starting sk_}
+      SENNET_AUTH_MODE: development
+      SENNET_DEVELOPMENT_SESSION_TOKEN: ${SENNET_DEVELOPMENT_SESSION_TOKEN:?Set a random local login session token}
+      SENNET_DEVELOPMENT_TENANT: local
     volumes: [all_in_one:/data]
     ports: ['127.0.0.1:8083:8080']
   web:

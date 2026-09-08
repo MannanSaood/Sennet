@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: sennet, role: gateway}}
+  template:
+    metadata: {labels: {app: sennet, role: gateway}}
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: gateway
+          image: sennet/backend
+          imagePullPolicy: IfNotPresent
+          ports: [{name: http, containerPort: 8080}]
+          env:
+            - {name: SENNET_ENV, value: production}
+            - {name: SENNET_ROLE, value: gateway}
+            - {name: SENNET_BIND, value: 0.0.0.0}
+            - {name: SENNET_AUTH_MODE, value: firebase}
+            - {name: SENNET_KAFKA_TOPIC, value: sennet-events}
+            - {name: SENNET_CLICKHOUSE_INIT, value: none}
+            - {name: SENNET_DATABASE_URL, valueFrom: {secretKeyRef: {name: sennet-data-plane, key: postgres-url}}}
+            - {name: SENNET_KAFKA_BROKERS, valueFrom: {secretKeyRef: {name: sennet-data-plane, key: kafka-brokers}}}
+            - {name: FIREBASE_SERVICE_ACCOUNT_JSON, valueFrom: {secretKeyRef: {name: sennet-data-plane, key: firebase-service-account-json}}}
+            - {name: SENNET_OPERATOR_TOKEN, valueFrom: {secretKeyRef: {name: sennet-data-plane, key: operator-token}}}
+          readinessProbe: {httpGet: {path: /ready, port: http}, periodSeconds: 5, failureThreshold: 3}
+          livenessProbe: {httpGet: {path: /live, port: http}, periodSeconds: 10, failureThreshold: 3}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: '1', memory: 512Mi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: gateway}
+spec:
+  selector: {app: sennet, role: gateway}
+  ports: [{name: http, port: 8080, targetPort: http}]

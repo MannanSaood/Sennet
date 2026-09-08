@@ -15,7 +15,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
  useEffect(() => {
   let alive = true;
   const refresh = async () => { try { const value = await session(); if (alive) setUser(value); } catch { if (alive) setUser(null); } finally { if (alive) setLoading(false); } };
-  const invalid = () => { sessionStorage.removeItem('sennet_access_key'); setUser(null); queries.clear(); };
+  const invalid = () => { setUser(null); queries.clear(); };
   window.addEventListener('sennet:unauthorized', invalid);
   const unsubscribe = isFirebaseConfigured ? onAuthChange(() => { void refresh(); }) : undefined;
   if (!isFirebaseConfigured) void refresh();
@@ -24,10 +24,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
  const accept = async () => { queries.clear(); setUser(await session()); };
  return <AuthContext.Provider value={{ user, isLoading, isAuthenticated: !!user, isFirebaseEnabled: isFirebaseConfigured,
   login: async (email,password) => { await signInWithEmail(email,password); await accept(); },
-  loginWithKey: async key => { sessionStorage.setItem('sennet_access_key',key.trim()); try { await accept(); } catch (error) { sessionStorage.removeItem('sennet_access_key'); throw error; } },
   loginWithGoogle: async () => { await signInWithGoogle(); await accept(); },
   loginWithGithub: async () => { await signInWithGithub(); await accept(); },
   register: async (email,password,name) => { await signUpWithEmail(email,password,name); await accept(); },
-  logout: async () => { if (isFirebaseConfigured) await signOut(); sessionStorage.removeItem('sennet_access_key'); queries.clear(); setUser(null); },
+  logout: async () => { if (isFirebaseConfigured) await signOut(); queries.clear(); setUser(null); },
  }}>{children}</AuthContext.Provider>;
 }
