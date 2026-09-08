@@ -45,7 +45,9 @@ Local evidence on 2026-09-08:
 - `go test ./...`: pass.
 - `go vet ./...`: pass.
 - `go test -race ./...`: not executed to completion because this Windows host has no C compiler required by Go's race runtime (`gcc` not found). The Linux CI gate remains configured.
-- Compose YAML parse: pass. Docker smoke: not run because Docker is not installed on this host.
+- Docker Desktop 29.7.2 Compose stack: pass after adding explicit one-shot ownership initialization for the Kafka and filesystem archive named volumes.
+- Streaming smoke: pass with 300 events acknowledged by Kafka and subsequently queryable from ClickHouse through the query role.
+- Kubernetes clients installed for follow-up manifest validation: kubectl 1.37.0 and kind 0.32.0. No Kubernetes workload result is claimed yet.
 
 ## Known limitations
 
@@ -55,6 +57,7 @@ Local evidence on 2026-09-08:
 - Broker readiness is a bounded network reachability check; append acknowledgements remain the actual durability signal.
 - The provided cluster DDL requires deployment-specific ClickHouse Keeper and macros and has not established HA.
 - No sustained throughput, regional failover, restore-time, or retention-exhaustion result is claimed.
+- Kubernetes deployment validation is pending the requested decision on whether "remove the API mechanism" means API-key authentication or all HTTP/OTLP and query endpoints; those choices produce different role manifests and trust boundaries.
 
 ## Migration notes
 

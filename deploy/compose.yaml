@@ -16,6 +16,16 @@ x-backend: &backend
     SENNET_OPERATOR_TOKEN: ${SENNET_OPERATOR_TOKEN:?Set a random operator metrics token}
 
 services:
+  kafka-volume-init:
+    image: apache/kafka:3.9.1
+    user: root
+    entrypoint: [/bin/chown, -R, '1000:1000', /tmp/kraft-combined-logs]
+    volumes: [kafka:/tmp/kraft-combined-logs]
+  archive-volume-init:
+    build: {context: '..', dockerfile: backend/Dockerfile}
+    user: root
+    entrypoint: [/bin/chown, -R, '1000:1000', /archive]
+    volumes: [archive:/archive]
   postgres:
     image: postgres:17.5-alpine
     environment:
@@ -26,6 +36,7 @@ services:
     healthcheck: {test: [CMD-SHELL, pg_isready -U sennet], interval: 5s, retries: 20}
   kafka:
     image: apache/kafka:3.9.1
+    depends_on: {kafka-volume-init: {condition: service_completed_successfully}}
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -70,7 +81,7 @@ services:
       SENNET_ROLE: storage-consumer
       SENNET_ARCHIVE_DIR: /archive
     volumes: [archive:/archive]
-    depends_on: {kafka-init: {condition: service_completed_successfully}, clickhouse: {condition: service_healthy}}
+    depends_on: {archive-volume-init: {condition: service_completed_successfully}, kafka-init: {condition: service_completed_successfully}, clickhouse: {condition: service_healthy}}
   query-control:
     <<: *backend
     environment:
