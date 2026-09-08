@@ -4,6 +4,7 @@ agent/target/
 **/target/
 **/*.rs.bk
 Cargo.lock
+!agent/Cargo.lock
 
 # ===== Go =====
 # Build artifacts
@@ -30,6 +31,8 @@ sennet.yaml
 *.env
 .env
 .env.*
+*-firebase-adminsdk-*.json
+**/node_modules/
 
 # ===== IDE / Editor =====
 .idea/
@@ -62,3 +65,7 @@ tmp/
 temp/
 *.tmp
 *.log
+.test-build/
+__pycache__/
+*.pyc
+sennet-outbox/

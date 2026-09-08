@@ -1,38 +1,11 @@
-# CLI Reference
+# Agent commands
 
-The `sennet` command line interface is your primary tool for managing the agent and viewing live stats.
+- `sennet start`: foreground collector daemon (also the default with no command).
+- `sennet init`: configure a local agent interactively.
+- `sennet status`: inspect local state.
+- `sennet top`: real Linux traffic rates, history and recent drop observations; q/Esc exits, p pauses.
+- `sennet top --json`: exact counter strings for scripts.
+- `sennet flows`, `sennet trace`, `sennet diagnose`: Linux/Kubernetes diagnostics; kernel-dependent probes are experimental and require environment validation.
+- `sennet upgrade`: explicit release update. Unattended updates are disabled by default.
 
-## Commands
-
-### `init`
-Initializes the agent configuration.
-```bash
-sudo sennet init
-```
-
-### `top`
-display top processes and flows sorted by bandwidth usage (like `htop`).
-```bash
-sudo sennet top
-```
-**Flags:**
-- `-i, --interface`: Select interface (default: auto)
-- `--sort`: Sort by `rx`, `tx`, or `total`
-
-### `status`
-Show the current health and connection status of the agent.
-```bash
-sudo sennet status
-```
-
-### `inspect`
-Dump raw eBPF map data for debugging.
-```bash
-sudo sennet inspect --map flows
-```
-
-### `version`
-Print version information.
-```bash
-sennet version
-```
+Live eBPF data is unavailable on Windows. The TUI fails clearly instead of substituting mock traffic. Optional kernel probes using layout-dependent fields require `SENNET_EXPERIMENTAL_KERNEL_PROBES=true` and verification on your kernel.

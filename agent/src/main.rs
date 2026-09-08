@@ -61,6 +61,7 @@ async fn main() -> Result<()> {
     // Handle remaining commands
     if args.len() > 1 {
         match args[1].as_str() {
+            "start" => {} // Explicit alias for running the foreground daemon.
             "upgrade" => {
                 info!("Checking for updates...");
                 let updater = Updater::new()?;
@@ -83,7 +84,7 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
             "top" => {
-                tui::run()?;
+                if args.iter().any(|a|a == "--json") { tui::snapshot_json()?; } else { tui::run()?; }
                 return Ok(());
             }
             "trace" => {
@@ -164,6 +165,17 @@ async fn main() -> Result<()> {
         }
     };
 
+    // One daemon owns the fixed pinned-map namespace. The advisory lock is
+    // released automatically when the process exits, including crashes.
+    #[cfg(target_os = "linux")]
+    let _daemon_lock = {
+        use std::os::fd::AsRawFd;
+        let lock = std::fs::OpenOptions::new().create(true).write(true).open("/run/sennet.lock")?;
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            anyhow::bail!("Another Sennet daemon owns the collector namespace");
+        }
+        lock
+    };
     // Load and attach eBPF programs (Linux only)
     #[cfg(target_os = "linux")]
     let _ebpf_manager = if !interface.is_empty() {

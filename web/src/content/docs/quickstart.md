@@ -1,39 +1,22 @@
-# Quick Start
+# Quickstart
 
-Get up and running with Sennet in less than 60 seconds.
+Run the Go backend with a random `INIT_API_KEY` and start the web development server:
 
-## Installation
-
-Run the following command to install the Sennet agent:
-
-```bash
-curl -sSL https://sennet.dev/install.sh | sudo bash
+```sh
+cd backend
+go run .
 ```
 
-This script will:
-1. Detect your OS and Architecture.
-2. Download the latest binary.
-3. Install a systemd service (if available).
-
-## Configuration
-
-Once installed, initialize the agent with your API key:
-
-```bash
-sudo sennet init
+```sh
+cd web
+npm ci
+npm run dev
 ```
 
-You will be prompted to enter your API key, which you can generate in the [Dashboard](/dashboard).
+Open http://localhost:5173. Use the bootstrap key to connect, then create an ingestion-only key under Workspace. Never embed keys in the website bundle.
 
-## Verify Installation
+Send OTLP/HTTP to port 8080 using `/v1/traces`, `/v1/logs`, or `/v1/metrics` with `Authorization: Bearer <ingest-key>`. JSON and protobuf payloads and gzip encoding are supported. Configure a persistent queue in your OpenTelemetry Collector.
 
-Check that the agent is running and collecting data:
+For explicit evaluation data, set `SENNET_API_KEY` and run `python examples/send_fixture.py` from the repository root. The workspace shows only ingested data.
 
-```bash
-sudo sennet status
-```
-
-You should see:
-> Sennet Agent v0.1.3 is running (PID: 1234)
-> Connected to Control Plane
-> eBPF Probes attached: 4
+Use the streaming compose deployment for PostgreSQL metadata, Kafka ingestion and ClickHouse analytics. Its single replicas are for evaluation; production replication, TLS, backups and capacity tests must be configured separately.

@@ -1,28 +1,9 @@
 # Architecture
 
-Sennet follows a modern, distributed architecture designed for scale and security.
+SDKs and Sennet agents send telemetry through an authenticated ingestion gateway. In streaming mode, the gateway waits for Kafka acknowledgement; a consumer batches writes into ClickHouse and commits offsets afterward. Replayed immutable IDs are deduplicated during queries. PostgreSQL stores credentials, collector inventory and saved settings.
 
-## High-Level Overview
+Queries require tenant scope and bounded time ranges, row limits and deadlines. The browser receives paginated observations. Local evaluation can use SQLite with WAL and full synchronization instead of external services.
 
-1.  **Agent (Data Plane)**: Runs on every node. It loads eBPF programs into the kernel to intercept and analyze network packets efficiently.
-2.  **Control Plane**: A centralized service that ingests data from agents, aggregates metrics, and manages configuration.
-3.  **Dashboard**: The user interface for visualizing data and managing the fleet.
+OpenTelemetry collectors add batching, retries, memory limits and persistent export queues. The Rust agent also keeps a bounded disk outbox. Monitoring data must explicitly distinguish unavailable collection, delayed export and zero observed traffic.
 
-## The Agent
-
-The Sennet Agent is written in Rust. It has two main components:
-
--   **User-Space Daemon**: Manages communication with the Control Plane and handles configuration.
--   **Kernel-Space eBPF**: Safe, sandboxed bytecode running in the kernel's network datapath (TC hook).
-
-### Why TC (Traffic Control)?
-
-We use the TC hook rather than XDP (eXpress Data Path) for most metrics because it allows us to see packets *after* they have been processed by the generic networking stack (e.g., after GRO/GSO), but *before* they reach the application. This gives us better context (like SKB metadata) while still being extremely fast.
-
-## Data Flow
-
-1.  **Packet Arrival**: A network packet arrives at the NIC.
-2.  **eBPF Hook**: Our eBPF program reads packet headers and updates in-kernel BPF Maps (counters/histograms).
-3.  **Aggregation**: The user-space agent periodically polls these maps (every 1s).
-4.  **Batching**: Metrics are batched and compressed.
-5.  **Transmission**: Batches are sent to the Control Plane via gRPC (ConnectRPC).
+The included compose topology is single-replica evaluation infrastructure. Multi-region capacity, distributed query admission, archive restore and high-availability guarantees require additional deployment validation.

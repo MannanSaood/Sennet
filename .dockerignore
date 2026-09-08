@@ -1,0 +1,11 @@
+.git
+**/node_modules
+**/target
+**/dist
+.test-build
+*.db*
+.env*
+**/*.env
+*-firebase-adminsdk-*.json
+*.pdf
+richtext_converted_to_markdown.md

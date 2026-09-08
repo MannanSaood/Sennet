@@ -32,7 +32,7 @@ const validateConfig = () => {
     const required = ['apiKey', 'authDomain', 'projectId'];
     for (const key of required) {
         if (!firebaseConfig[key as keyof typeof firebaseConfig]) {
-            console.warn(`Missing Firebase config: ${key}. Using mock auth.`);
+            console.warn(`Missing Firebase config: ${key}. Access-key authentication is available.`);
             return false;
         }
     }

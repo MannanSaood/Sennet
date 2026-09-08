@@ -112,7 +112,7 @@ func (p *AWSProvider) FetchFlowLogs(ctx context.Context, startDate, endDate time
 }
 
 func (p *AWSProvider) TestConnection(ctx context.Context) error {
-	return nil
+	return fmt.Errorf("provider integration is not configured; connection was not verified")
 }
 
 type AzureProvider struct {
@@ -140,7 +140,7 @@ func (p *AzureProvider) FetchFlowLogs(ctx context.Context, startDate, endDate ti
 }
 
 func (p *AzureProvider) TestConnection(ctx context.Context) error {
-	return nil
+	return fmt.Errorf("provider integration is not configured; connection was not verified")
 }
 
 type GCPProvider struct {
@@ -168,5 +168,5 @@ func (p *GCPProvider) FetchFlowLogs(ctx context.Context, startDate, endDate time
 }
 
 func (p *GCPProvider) TestConnection(ctx context.Context) error {
-	return nil
+	return fmt.Errorf("provider integration is not configured; connection was not verified")
 }

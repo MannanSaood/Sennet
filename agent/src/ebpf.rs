@@ -376,12 +376,12 @@ impl EbpfManager {
         // Pin COUNTERS map
         tracing::info!("Pinning maps to /sys/fs/bpf/sennet...");
         if let Some(map) = bpf.map_mut("COUNTERS") {
-            let _ = map.pin(pin_path.join("counters")); // Ignore if already pinned
+            publish_map(map, &pin_path.join("counters"))?;
         }
         
         // Pin DROP_EVENTS map (Phase 6.1)
         if let Some(map) = bpf.map_mut("DROP_EVENTS") {
-            let _ = map.pin(pin_path.join("drop_events")); // Ignore if already pinned
+            publish_map(map, &pin_path.join("drop_events"))?;
         }
 
         // Attach TC Programs
@@ -401,7 +401,7 @@ impl EbpfManager {
         // Try to attach kfree_skb tracepoint (Phase 6.1)
         // This may fail on older kernels or if tracepoint doesn't exist
         let mut drop_tracing_enabled = false;
-        if let Some(prog) = bpf.program_mut("kfree_skb") {
+        if let Some(prog) = bpf.program_mut("kfree_skb").filter(|_| std::env::var("SENNET_EXPERIMENTAL_KERNEL_PROBES").as_deref() == Ok("true")) {
             match prog.try_into() as Result<&mut TracePoint, _> {
                 Ok(tp) => {
                     if let Err(e) = tp.load() {
@@ -423,7 +423,7 @@ impl EbpfManager {
 
         // Try to attach nf_hook_slow tracepoint (Phase 6.2)
         let mut nf_tracing_enabled = false;
-        if let Some(prog) = bpf.program_mut("nf_hook_slow") {
+        if let Some(prog) = bpf.program_mut("nf_hook_slow").filter(|_| std::env::var("SENNET_EXPERIMENTAL_KERNEL_PROBES").as_deref() == Ok("true")) {
             match prog.try_into() as Result<&mut TracePoint, _> {
                 Ok(tp) => {
                     if let Err(e) = tp.load() {
@@ -445,14 +445,14 @@ impl EbpfManager {
 
         // Pin NF_EVENTS map if available
         if let Some(map) = bpf.map_mut("NF_EVENTS") {
-            let _ = map.pin(pin_path.join("nf_events"));
+            publish_map(map, &pin_path.join("nf_events"))?;
         }
 
         // Try to attach flow tracking kprobes (Phase 8)
         let mut flow_tracing_enabled = false;
         
         // tcp_connect kprobe - track outbound connections
-        if let Some(prog) = bpf.program_mut("tcp_connect") {
+        if let Some(prog) = bpf.program_mut("tcp_connect").filter(|_| std::env::var("SENNET_EXPERIMENTAL_KERNEL_PROBES").as_deref() == Ok("true")) {
             match prog.try_into() as Result<&mut KProbe, _> {
                 Ok(kp) => {
                     if let Err(e) = kp.load() {
@@ -471,7 +471,7 @@ impl EbpfManager {
         }
         
         // inet_csk_accept kprobe - track inbound connections
-        if let Some(prog) = bpf.program_mut("inet_csk_accept") {
+        if let Some(prog) = bpf.program_mut("inet_csk_accept").filter(|_| std::env::var("SENNET_EXPERIMENTAL_KERNEL_PROBES").as_deref() == Ok("true")) {
             match prog.try_into() as Result<&mut KProbe, _> {
                 Ok(kp) => {
                     if let Err(e) = kp.load() {
@@ -489,7 +489,7 @@ impl EbpfManager {
         }
         
         // tcp_close kprobe - track connection closures
-        if let Some(prog) = bpf.program_mut("tcp_close") {
+        if let Some(prog) = bpf.program_mut("tcp_close").filter(|_| std::env::var("SENNET_EXPERIMENTAL_KERNEL_PROBES").as_deref() == Ok("true")) {
             match prog.try_into() as Result<&mut KProbe, _> {
                 Ok(kp) => {
                     if let Err(e) = kp.load() {
@@ -508,12 +508,12 @@ impl EbpfManager {
         
         // Pin FLOWS map if available
         if let Some(map) = bpf.map_mut("FLOWS") {
-            let _ = map.pin(pin_path.join("flows"));
+            publish_map(map, &pin_path.join("flows"))?;
         }
         
         // Pin FLOW_EVENTS map if available
         if let Some(map) = bpf.map_mut("FLOW_EVENTS") {
-            let _ = map.pin(pin_path.join("flow_events"));
+            publish_map(map, &pin_path.join("flow_events"))?;
         }
 
         Ok(Self {
@@ -644,4 +644,15 @@ mod tests {
         let counters = manager.read_counters().unwrap();
         assert_eq!(counters.rx_packets, 0);
     }
+}
+
+#[cfg(target_os = "linux")]
+fn publish_map(map: &mut aya::maps::Map, path: &std::path::Path) -> anyhow::Result<()> {
+    let temporary = path.with_extension(format!("new-{}",std::process::id()));
+    map.pin(&temporary)?;
+    if let Err(error) = std::fs::rename(&temporary,path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+    Ok(())
 }

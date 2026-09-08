@@ -31,17 +31,12 @@ const buttonVariants = cva(
 export interface ButtonProps
     extends ButtonHTMLAttributes<HTMLButtonElement>,
     VariantProps<typeof buttonVariants> {
-    asChild?: boolean;
+
     isLoading?: boolean;
 }
 
 const Button = forwardRef<HTMLButtonElement, ButtonProps>(
-    ({ className, variant, size, asChild = false, isLoading = false, children, disabled, ...props }, ref) => {
-        // If we need Slot we need to install @radix-ui/react-slot, but I didn't install it in step 1.
-        // I'll skip Slot for now and just use button, or I'll install it if I want "asChild" functionality fully.
-        // For now, I'll remove Slot dependency to keep it simple as I haven't installed radix.
-
-        // Changing approach to standard button to avoid uninstalled dependency error for now.
+    ({ className, variant, size, isLoading = false, children, disabled, ...props }, ref) => {
         const Comp = "button";
 
         return (
@@ -59,4 +54,4 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
 );
 Button.displayName = "Button";
 
-export { Button, buttonVariants };
+export { Button };

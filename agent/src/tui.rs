@@ -9,13 +9,17 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Span, Line},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Sparkline},
     Terminal,
 };
 use std::{io, time::{Duration, Instant}};
 
 // Data structures for UI
 struct AppState {
+    rx_rate: u64,
+    tx_rate: u64,
+    history: Vec<u64>,
+    paused: bool,
     rx_packets: u64,
     rx_bytes: u64,
     tx_packets: u64,
@@ -240,60 +244,32 @@ impl DataProvider for RealDataProvider {
 }
 
 // -----------------------------------------------------------------------------
-// Mock Data Provider (Windows / Dev)
-struct MockDataProvider {
-    start_time: Instant,
-}
-
-impl MockDataProvider {
-    fn new() -> Self {
-        Self { start_time: Instant::now() }
-    }
-}
-
-impl DataProvider for MockDataProvider {
-    fn update(&mut self, state: &mut AppState) -> Result<()> {
-        let elapsed = self.start_time.elapsed().as_secs_f64();
-        
-        // Simulate traffic patterns (sine wave)
-        let rate_rx = (elapsed.sin() * 500.0 + 1000.0) as u64; // packets/sec
-        let rate_tx = (elapsed.cos() * 200.0 + 500.0) as u64;
-        
-        state.rx_packets += rate_rx;
-        state.rx_bytes += rate_rx * 128; // avg 128 bytes
-        state.tx_packets += rate_tx;
-        state.tx_bytes += rate_tx * 128;
-
-        // Simulate events
-        if rand::random::<u8>() > 250 {
-           state.events.insert(0, format!("[{:.0}s] Large Packet: 192.168.1.5 -> 10.0.0.1 (Proto 6)", elapsed));
-           if state.events.len() > 20 { state.events.pop(); }
-        }
-        
-        // Simulate occasional drop events
-        if rand::random::<u8>() > 253 {
-            let reasons = ["NETFILTER_DROP", "NO_SOCKET", "TCP_RESET", "IP_OUTNOROUTES"];
-            let severities = [DropSeverity::Security, DropSeverity::Config, DropSeverity::Normal, DropSeverity::Config];
-            let idx = (elapsed as usize) % reasons.len();
-            state.drop_events.insert(0, DropEventDisplay {
-                timestamp_secs: elapsed as u64,
-                reason: reasons[idx].to_string(),
-                hook: Some("INPUT".to_string()),
-                severity: severities[idx],
-            });
-            if state.drop_events.len() > 20 { state.drop_events.pop(); }
-        }
-        
-        Ok(())
-    }
-}
-
-// -----------------------------------------------------------------------------
 // Main Run Function
 
+#[cfg(not(target_os = "linux"))]
 pub fn run() -> Result<()> {
+    anyhow::bail!("Live monitoring requires Linux and a running Sennet eBPF agent")
+}
+
+// Restores the terminal on normal return, setup errors, and panic unwinding.
+struct TerminalGuard;
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture, crossterm::cursor::Show);
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn run() -> Result<()> {
+    // Resolve the source before entering raw mode. Never disguise collection
+    // failure as healthy, simulated traffic.
+    #[cfg(target_os = "linux")]
+    let mut provider: Box<dyn DataProvider> = Box::new(RealDataProvider::new()?);
+
     // Setup terminal
     enable_raw_mode()?;
+    let _terminal_guard = TerminalGuard;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
@@ -301,6 +277,7 @@ pub fn run() -> Result<()> {
 
     // Create App State
     let mut app_state = AppState {
+        rx_rate: 0, tx_rate: 0, history: Vec::new(), paused: false,
         rx_packets: 0,
         rx_bytes: 0,
         tx_packets: 0,
@@ -309,33 +286,11 @@ pub fn run() -> Result<()> {
         drop_events: Vec::new(),
     };
 
-    // Choose Provider
-    #[cfg(target_os = "linux")]
-    let mut provider: Box<dyn DataProvider> = match RealDataProvider::new() {
-        Ok(real) => Box::new(real),
-        Err(_) => Box::new(MockDataProvider::new()), // Fallback to mock if real fails
-    };
-
-    #[cfg(not(target_os = "linux"))]
-    let mut provider: Box<dyn DataProvider> = Box::new(MockDataProvider::new());
-
+    provider.update(&mut app_state)?;
     // Run Loop
     let res = run_app(&mut terminal, &mut *provider, &mut app_state);
 
-    // Restore terminal
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
-
-    if let Err(err) = res {
-        println!("{:?}", err);
-    }
-
-    Ok(())
+    res
 }
 
 fn run_app<B: Backend>(
@@ -355,92 +310,67 @@ fn run_app<B: Backend>(
 
         if crossterm::event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
-                if let KeyCode::Char('q') = key.code {
+                if key.code == KeyCode::Char('q') || key.code == KeyCode::Esc || (key.code == KeyCode::Char('c') && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)) {
                     return Ok(());
                 }
+                if key.code == KeyCode::Char('p') { state.paused = !state.paused; }
             }
         }
 
         if last_tick.elapsed() >= tick_rate {
-            provider.update(state)?;
+            if !state.paused {
+                let previous_rx = state.rx_bytes;
+                let previous_tx = state.tx_bytes;
+                let elapsed = last_tick.elapsed().as_secs_f64().max(0.001);
+                provider.update(state)?;
+                state.rx_rate = (state.rx_bytes.saturating_sub(previous_rx) as f64 / elapsed) as u64;
+                state.tx_rate = (state.tx_bytes.saturating_sub(previous_tx) as f64 / elapsed) as u64;
+                state.history.push(state.rx_rate.saturating_add(state.tx_rate));
+                if state.history.len() > 120 { state.history.remove(0); }
+            }
             last_tick = Instant::now();
         }
     }
 }
 
 fn ui(f: &mut ratatui::Frame, state: &AppState) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .margin(1)
-        .constraints(
-            [
-                Constraint::Length(3),  // Header
-                Constraint::Length(8),  // Stats
-                Constraint::Length(10), // Drops (Phase 6.3)
-                Constraint::Min(0),     // Events
-            ]
-            .as_ref(),
-        )
-        .split(f.area());
-
-    // 1. Header
-    let title = Paragraph::new(Span::styled(
-        "Sennet Network Monitor (Press 'q' to quit)",
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-    ))
-    .block(Block::default().borders(Borders::ALL));
-    f.render_widget(title, chunks[0]);
-
-    // 2. Stats
-    let stats_text = vec![
-        Line::from(vec![
-            Span::raw("RX Packets: "),
-            Span::styled(format!("{}", state.rx_packets), Style::default().fg(Color::Green)),
-        ]),
-        Line::from(vec![
-            Span::raw("RX Bytes:   "),
-            Span::styled(format!("{}", state.rx_bytes), Style::default().fg(Color::Green)),
-        ]),
-        Line::from(vec![
-            Span::raw("TX Packets: "),
-            Span::styled(format!("{}", state.tx_packets), Style::default().fg(Color::Blue)),
-        ]),
-        Line::from(vec![
-            Span::raw("TX Bytes:   "),
-            Span::styled(format!("{}", state.tx_bytes), Style::default().fg(Color::Blue)),
-        ]),
-    ];
-    let stats = Paragraph::new(stats_text)
-        .block(Block::default().title("Traffic Stats").borders(Borders::ALL));
-    f.render_widget(stats, chunks[1]);
-
-    // 3. Drop Events (Phase 6.3)
-    let drop_items: Vec<ListItem> = state
-        .drop_events
-        .iter()
-        .map(|e| {
-            let color = match e.severity {
-                DropSeverity::Security => Color::Red,
-                DropSeverity::Config => Color::Yellow,
-                DropSeverity::Normal => Color::Gray,
-            };
-            let hook_str = e.hook.as_deref().unwrap_or("");
-            let text = format!("[{}s] {} {}", e.timestamp_secs, e.reason, hook_str);
-            ListItem::new(Span::styled(text, Style::default().fg(color)))
-        })
-        .collect();
-    let drops_list = List::new(drop_items)
-        .block(Block::default().title("Recent Drops (Phase 6)").borders(Borders::ALL));
-    f.render_widget(drops_list, chunks[2]);
-
-    // 4. Events
-    let events: Vec<ListItem> = state
-        .events
-        .iter()
-        .map(|e| ListItem::new(Span::raw(e)))
-        .collect();
-    let events_list = List::new(events)
-        .block(Block::default().title("Recent Events").borders(Borders::ALL));
-    f.render_widget(events_list, chunks[3]);
+    if f.area().width < 45 || f.area().height < 15 {
+        f.render_widget(Paragraph::new("Resize terminal to at least 45×15. q: quit"),f.area());
+        return;
+    }
+    let regions = Layout::default().direction(Direction::Vertical).margin(1)
+        .constraints([Constraint::Length(3),Constraint::Length(5),Constraint::Length(5),Constraint::Min(1),Constraint::Length(1)]).split(f.area());
+    f.render_widget(Paragraph::new(format!(" SENNET  /  NETWORK INVESTIGATION     {}",if state.paused {"PAUSED"} else {"LOCAL"}))
+        .style(Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD))
+        .block(Block::default().borders(Borders::BOTTOM)),regions[0]);
+    let counters=Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage(50),Constraint::Percentage(50)]).split(regions[1]);
+    for (area,label,rate,total,color) in [(counters[0]," INBOUND ",state.rx_rate,state.rx_bytes,Color::LightGreen),(counters[1]," OUTBOUND ",state.tx_rate,state.tx_bytes,Color::LightBlue)] {
+        f.render_widget(Paragraph::new(vec![Line::from(Span::styled(format!(" {} /s",human_bytes(rate)),Style::default().fg(color).add_modifier(Modifier::BOLD))),Line::from(format!(" {} observed",human_bytes(total)))])
+            .block(Block::default().title(label).borders(Borders::ALL)),area);
+    }
+    f.render_widget(Sparkline::default().data(&state.history).style(Style::default().fg(Color::LightGreen))
+        .block(Block::default().title(" TRAFFIC HISTORY · bytes/s ").borders(Borders::ALL)),regions[2]);
+    let items:Vec<ListItem> = if state.drop_events.is_empty(){vec![ListItem::new(" No drop events observed. Optional kernel probes may be disabled.")]} else {
+        state.drop_events.iter().map(|e|ListItem::new(format!(" {}s  {}  {}",e.timestamp_secs,e.reason,e.hook.as_deref().unwrap_or(""))).style(Style::default().fg(match e.severity {DropSeverity::Security=>Color::LightRed,DropSeverity::Config=>Color::Yellow,DropSeverity::Normal=>Color::Gray}))).collect()
+    };
+    f.render_widget(List::new(items).block(Block::default().title(" RECENT DROPS ").borders(Borders::ALL)),regions[3]);
+    f.render_widget(Paragraph::new(" q / Esc quit    p pause    Refresh 250ms · cumulative counters reset on restart").style(Style::default().fg(Color::DarkGray)),regions[4]);
+}
+fn human_bytes(value:u64)->String {
+    if value>=1024*1024*1024 {format!("{:.2} GiB",value as f64/(1024.0*1024.0*1024.0))}
+    else if value>=1024*1024 {format!("{:.2} MiB",value as f64/(1024.0*1024.0))}
+    else if value>=1024 {format!("{:.1} KiB",value as f64/1024.0)}
+    else {format!("{} B",value)}
 }
 
+pub fn snapshot_json() -> Result<()> {
+    #[cfg(target_os="linux")]
+    {
+        let provider=RealDataProvider::new()?;
+        let totals=provider.read_totals()?;
+        println!("{}",serde_json::json!({"rx_bytes":totals.rx_bytes.to_string(),"tx_bytes":totals.tx_bytes.to_string(),"rx_packets":totals.rx_packets.to_string(),"tx_packets":totals.tx_packets.to_string()}));
+        Ok(())
+    }
+    #[cfg(not(target_os="linux"))]
+    { anyhow::bail!("Local eBPF snapshots require Linux"); }
+}

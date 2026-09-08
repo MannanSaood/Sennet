@@ -3,7 +3,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { Link, useNavigate } from "react-router-dom";
-import { useAuth } from "@/context/AuthContext";
+import { useAuth } from "@/hooks/useAuth";
 import { AuthLayout } from "@/components/auth/AuthLayout";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -46,7 +46,7 @@ export function RegisterPage() {
                 variant: "success",
             });
             navigate("/dashboard");
-        } catch (error) {
+        } catch {
             toast({
                 title: "Registration failed",
                 description: "Could not create account. Try a different email.",

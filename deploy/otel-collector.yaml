@@ -1,0 +1,23 @@
+extensions:
+  file_storage: {directory: /var/lib/otelcol/queue}
+receivers:
+  otlp:
+    protocols:
+      grpc: {endpoint: '0.0.0.0:4317'}
+      http: {endpoint: '0.0.0.0:4318'}
+processors:
+  memory_limiter: {check_interval: 1s, limit_mib: 256, spike_limit_mib: 64}
+  batch: {send_batch_size: 500, send_batch_max_size: 1000, timeout: 1s}
+exporters:
+  otlphttp/sennet:
+    endpoint: ${env:OTEL_EXPORTER_OTLP_ENDPOINT}
+    headers: {Authorization: 'Bearer ${env:SENNET_INGEST_KEY}'}
+    compression: gzip
+    sending_queue: {enabled: true, num_consumers: 4, queue_size: 10000, storage: file_storage}
+    retry_on_failure: {enabled: true, initial_interval: 1s, max_interval: 30s, max_elapsed_time: 0s}
+service:
+  extensions: [file_storage]
+  pipelines:
+    traces: {receivers: [otlp], processors: [memory_limiter, batch], exporters: [otlphttp/sennet]}
+    logs: {receivers: [otlp], processors: [memory_limiter, batch], exporters: [otlphttp/sennet]}
+    metrics: {receivers: [otlp], processors: [memory_limiter, batch], exporters: [otlphttp/sennet]}

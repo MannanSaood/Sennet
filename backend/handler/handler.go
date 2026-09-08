@@ -5,7 +5,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"log"
+	"strings"
 
 	"connectrpc.com/connect"
 	"github.com/sennet/sennet/backend/db"
@@ -41,13 +43,20 @@ func (h *SentinelHandler) Heartbeat(
 	agentID := req.Msg.AgentId
 	currentVersion := req.Msg.CurrentVersion
 	agentMetrics := req.Msg.Metrics
+	if strings.TrimSpace(agentID) == "" || len(agentID) > 128 || len(currentVersion) > 64 {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("agent ID is required (max 128 bytes); version max 64 bytes"))
+	}
+	// Never acknowledge registration when persistence failed.
+	if err := h.db.CreateOrUpdateAgent(agentID, currentVersion); err != nil {
+		return nil, connect.NewError(connect.CodeUnavailable, errors.New("failed to persist heartbeat"))
+	}
 
 	// Log the heartbeat
 	log.Printf("Heartbeat from agent %s (v%s)", agentID, currentVersion)
 	if agentMetrics != nil {
 		log.Printf("  Metrics: rx=%d tx=%d drops=%d uptime=%ds",
 			agentMetrics.RxPackets, agentMetrics.TxPackets, agentMetrics.DropCount, agentMetrics.UptimeSeconds)
-		
+
 		// Update Prometheus metrics
 		metrics.UpdateAgentMetrics(
 			agentID,
@@ -58,12 +67,6 @@ func (h *SentinelHandler) Heartbeat(
 			agentMetrics.DropCount,
 			agentMetrics.UptimeSeconds,
 		)
-	}
-
-	// Update agent in database
-	if err := h.db.CreateOrUpdateAgent(agentID, currentVersion); err != nil {
-		log.Printf("Failed to update agent %s: %v", agentID, err)
-		// Continue anyway - don't fail the heartbeat
 	}
 
 	// Determine command based on version comparison

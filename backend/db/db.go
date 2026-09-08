@@ -221,7 +221,7 @@ func (db *DB) ValidateAPIKey(key string) (bool, error) {
 		return false, nil
 	}
 
-	query := `SELECT 1 FROM api_keys WHERE key = ?`
+	query := `SELECT 1 FROM api_keys WHERE key = ? AND (expires_at IS NULL OR expires_at > datetime('now'))`
 	row := db.conn.QueryRow(query, key)
 
 	var exists int

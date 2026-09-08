@@ -20,7 +20,7 @@ pub struct MetricsSummary {
 }
 
 /// Heartbeat request payload
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HeartbeatRequest {
     pub agent_id: String,
@@ -60,6 +60,7 @@ pub struct HeartbeatResponse {
 }
 
 /// Client for the Sentinel service
+#[derive(Clone)]
 pub struct SentinelClient {
     base_url: String,
     api_key: String,
@@ -74,6 +75,15 @@ impl SentinelClient {
         })
     }
 
+    /// Export a durable batch. Retain the spool file until acknowledgement.
+    pub fn export_events(&self, body: &[u8]) -> Result<()> {
+        ureq::post(&format!("{}/api/events", self.base_url))
+            .timeout(std::time::Duration::from_secs(10))
+            .set("Authorization", &format!("Bearer {}", self.api_key))
+            .set("Content-Type", "application/json")
+            .send_bytes(body)?;
+        Ok(())
+    }
     /// Send a heartbeat to the control plane
     pub fn heartbeat(&self, request: &HeartbeatRequest) -> Result<HeartbeatResponse> {
         let url = format!("{}/sentinel.v1.SentinelService/Heartbeat", self.base_url);
@@ -90,6 +100,7 @@ impl SentinelClient {
         let signature = crate::crypto::sign_request(&self.api_key, timestamp, &body);
 
         let response = ureq::post(&url)
+            .timeout(std::time::Duration::from_secs(10))
             .set("Authorization", &format!("Bearer {}", self.api_key))
             .set("Content-Type", "application/json")
             .set("X-Sennet-Timestamp", &timestamp.to_string())

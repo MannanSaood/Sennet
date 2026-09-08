@@ -33,15 +33,9 @@ func GetEncryptionKey() ([]byte, error) {
 		key = []byte(keyStr)
 	}
 
-	// Pad or truncate to 32 bytes
-	if len(key) < 32 {
-		padded := make([]byte, 32)
-		copy(padded, key)
-		key = padded
-	} else if len(key) > 32 {
-		key = key[:32]
+	if len(key) != 32 {
+		return nil, errors.New("encryption key must contain exactly 32 bytes")
 	}
-
 	return key, nil
 }
 

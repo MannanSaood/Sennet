@@ -1,189 +1,43 @@
-# Sennet Backend Deployment Guide
+# Deployment, migration and recovery
 
-## Koyeb Deployment (Recommended - Free Tier)
+## Configuration
 
-### Prerequisites
-1. [Koyeb account](https://app.koyeb.com/) (free tier available)
-2. GitHub repository connected
+| Variable | Purpose |
+|---|---|
+| SENNET_DATABASE_URL | PostgreSQL URL or local SQLite file; default `./sennet-platform.db` |
+| INIT_API_KEY | Random bootstrap credential, `sk_` prefix, at least 24 characters |
+| SENNET_BOOTSTRAP_TENANT | Explicit bootstrap tenant, default `local` |
+| SENNET_BIND / PORT | Bind address (default loopback) and port (8080) |
+| SENNET_ALLOWED_ORIGINS | Exact comma-separated browser origins; no wildcard |
+| SENNET_CLICKHOUSE_URL / USER / PASSWORD | Analytical backend endpoint and credentials |
+| SENNET_KAFKA_BROKERS / TOPIC | Broker addresses and topic (`sennet-events`) |
+| SENNET_KAFKA_TLS / USER / PASSWORD | Broker transport TLS and optional SASL |
+| SENNET_ENV | `production` requires PostgreSQL, Kafka and ClickHouse |
+| FIREBASE_SERVICE_ACCOUNT_PATH | Optional Firebase server identity; each verified UID owns a private tenant |
 
-### Option A: Deploy via Web UI (Easiest)
+Credential values belong in a secret manager or deployment environment. Browser variables must never contain ingestion/admin secrets. Frontend Firebase configuration is optional; self-hosted access-key sign-in works without it.
 
-1. Go to [Koyeb Dashboard](https://app.koyeb.com/)
-2. Click **Create App** → **GitHub**
-3. Connect your GitHub repo
-4. Configure:
-   - **Dockerfile path**: `backend/Dockerfile`
-   - **Port**: `8080`
-   - **Region**: Frankfurt (fra) for free tier
-5. Add environment variables:
-   - `LATEST_VERSION` = `1.0.0`
-6. Click **Deploy**
+TLS termination is required when serving outside loopback. Trust only configured ingress hosts. The rate limiter deliberately ignores forwarded headers, so a shared proxy uses a shared pre-auth source budget. Place scalable authenticated quotas at the gateway before raising local defaults. Configure Kafka topics explicitly for production (replication factor >=3, minimum in-sync replicas >=2, sufficient partitions and retention). Required-acks alone does not create replication. The example ClickHouse table is a local ReplacingMergeTree; use appropriately configured replicated/distributed tables in production after validating query and replay semantics.
 
-### Option B: Deploy via CLI
+## Migration
 
-```bash
-# Install Koyeb CLI
-# Windows (via Scoop):
-scoop install koyeb
+The new server uses `platform_*` tables and a separate default SQLite file. It does not expose legacy global key, cost or dashboard endpoints. Existing legacy keys are not silently promoted. If a legacy INIT_API_KEY is reused, it is deliberately seeded as one bootstrap tenant; rotate it immediately and issue scoped credentials.
 
-# Or download from: https://github.com/koyeb/koyeb-cli/releases
+1. Back up the legacy database and config; preserve existing files.
+2. Inventory owners and resolve unowned records explicitly.
+3. Deploy the new stack alongside the old service, initially for an evaluation tenant.
+4. Issue new ingestion credentials; validate OTLP and application events with a fixture.
+5. Compare query results, ownership and event counts before switching each tenant.
+6. Retain rollback routing/config and old read-only backups until acceptance.
 
-# Login
-koyeb login
+Schema version 1 is created transactionally. Future migrations must be additive and versioned; do not mutate historical telemetry in place. Event IDs and event timestamps must remain immutable during retry. Kafka delivery is at least once; query-time `FINAL` deduplicates identical tenant/time/ID records in ClickHouse. Changing an ID's timestamp is a new ordering key and violates the event contract.
 
-# Deploy (from project root)
-koyeb app create sennet-backend \
-  --docker backend/Dockerfile \
-  --ports 8080:http \
-  --routes /:8080 \
-  --regions fra \
-  --instance-type free \
-  --env PORT=8080 \
-  --env LATEST_VERSION=1.0.0
-```
+## Recovery drills
 
-### Verify Deployment
+Back up PostgreSQL using your managed database backup system or `pg_dump` (verify restore into a new database). Back up ClickHouse with a supported native/object-storage backup workflow and test restore against counts and representative queries. Preserve Kafka offsets and sufficient retention for recovery; a backup of metadata alone does not back up telemetry. Local SQLite backup must use the SQLite backup API or a stopped database, not a copy of only the live `.db` file while WAL exists.
 
-```bash
-# Your URL will be: https://sennet-backend-<your-org>.koyeb.app
+Test collector disconnect/reconnect, consumer kill after insert before commit, broker replica loss, ClickHouse unavailability, expired credentials, full collector disk, invalid broker record, restore and replay. Invalid broker records currently block processing for operator repair; no records are silently skipped. A production dead-letter/repair workflow remains necessary before unattended high-volume operation.
 
-# Test health
-curl https://sennet-backend-<your-org>.koyeb.app/health
+## Execution boundaries
 
-# Test auth (should return 401)
-curl -X POST https://sennet-backend-<your-org>.koyeb.app/sentinel.v1.SentinelService/Heartbeat
-```
-
-### Generate API Key on Koyeb
-
-Koyeb doesn't have persistent storage on free tier, so you'll need to:
-
-1. Use environment variable for a pre-generated key, OR
-2. Upgrade to add persistent volume
-
-For now, let's use an in-memory initial key. Add this environment variable:
-- `INIT_API_KEY` = (generate one locally first with `./sennet-server keygen`)
-
----
-
-## Railway Deployment (Requires Paid Plan)
-
-```bash
-# Set via CLI
-railway variables set LATEST_VERSION=1.0.0
-```
-
-### Persistent Storage
-
-Railway provides ephemeral storage by default. For persistent SQLite:
-
-1. Go to Railway Dashboard → Your Project → Settings
-2. Add a Volume mounted at `/data`
-3. The database will persist at `/data/sennet.db`
-
-### Generate API Key (After Deploy)
-
-```bash
-# SSH into the container
-railway run ./sennet-server keygen --name "Production"
-```
-
-Or use the Railway shell:
-```bash
-railway shell
-./sennet-server keygen --name "Production"
-```
-
-### Verify Deployment
-
-```bash
-# Get your deployment URL
-railway open
-
-# Test health endpoint
-curl https://your-app.railway.app/health
-
-# Test heartbeat (should return 401 without auth)
-curl -X POST https://your-app.railway.app/sentinel.v1.SentinelService/Heartbeat
-```
-
----
-
-## Fly.io Deployment (Alternative)
-
-### Prerequisites
-1. [Fly CLI](https://fly.io/docs/hands-on/install-flyctl/) installed
-2. Fly.io account
-
-### Quick Deploy
-
-```bash
-# Login
-fly auth login
-
-# Launch (first time)
-cd backend
-fly launch --dockerfile Dockerfile
-
-# Deploy updates
-fly deploy
-```
-
-### fly.toml
-
-Create `backend/fly.toml`:
-
-```toml
-app = "sennet-backend"
-primary_region = "sjc"
-
-[build]
-  dockerfile = "Dockerfile"
-
-[env]
-  PORT = "8080"
-  LATEST_VERSION = "1.0.0"
-
-[http_service]
-  internal_port = 8080
-  force_https = true
-  auto_stop_machines = true
-  auto_start_machines = true
-  min_machines_running = 0
-
-[[http_service.checks]]
-  path = "/health"
-  interval = "30s"
-  timeout = "5s"
-
-[mounts]
-  source = "sennet_data"
-  destination = "/data"
-```
-
-### Create Volume
-
-```bash
-fly volumes create sennet_data --size 1 --region sjc
-```
-
-### Deploy
-
-```bash
-fly deploy
-```
-
----
-
-## Docker Local Testing
-
-```bash
-# Build
-docker build -t sennet-backend -f backend/Dockerfile .
-
-# Run
-docker run -p 8080:8080 -v sennet-data:/data sennet-backend
-
-# Test
-curl http://localhost:8080/health
-```
+The compose evaluation topology and privileged Linux eBPF runtime require Linux/Docker. They are not validated merely by passing Windows tests. Sustained ingest/query throughput, multi-region failover, business-specific financial reconciliation and cloud account integrations require their respective environments and acceptance data. See the implementation status for exact evidence.

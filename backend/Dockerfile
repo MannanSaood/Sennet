@@ -56,9 +56,9 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 
 # Environment variables
 ENV PORT=8080
-ENV DB_PATH=/data/sennet.db
-ENV LATEST_VERSION=1.0.0
+ENV SENNET_DATABASE_URL=/data/sennet-platform.db
+ENV SENNET_BIND=0.0.0.0
 
 # Run the server
 ENTRYPOINT ["./sennet-server"]
-CMD ["-port", "8080", "-db", "/data/sennet.db"]
+CMD []

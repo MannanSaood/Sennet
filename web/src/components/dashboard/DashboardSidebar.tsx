@@ -8,7 +8,7 @@ import {
     LogOut,
     Shield
 } from "lucide-react";
-import { useAuth } from "@/context/AuthContext";
+import { useAuth } from "@/hooks/useAuth";
 
 const navItems = [
     { name: "Overview", href: "/dashboard", icon: LayoutDashboard },

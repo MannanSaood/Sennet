@@ -1,23 +1,9 @@
-# Introduction to Sennet
+# Sennet observability
 
-Sennet is a next-generation network observability platform powered by eBPF. It provides granular visibility into your infrastructure without the overhead of sidecars or heavy agents.
+Investigate traces, logs, metrics, network flows, multi-agent runs and financial events from one tenant-scoped workspace.
 
-## Why Sennet?
+The current application provides real ingestion and querying, time/search controls, trace waterfalls, dependencies derived from observed relationships, saved views and access-key management. All empty, error and partial states remain visible. There is no automatic sample-data fallback.
 
-- **Zero Overhead**: Runs in kernel space using eBPF.
-- **Deep Visibility**: See every packet, flow, and drop.
-- **K8s Native**: Understands Pods, Services, and Namespaces.
-- **Developer Friendly**: Beautiful CLI and modern Dashboard.
+Start with the [quickstart](/docs/quickstart), then [API contracts](/docs/api) and [architecture](/docs/architecture).
 
-## How it Works
-
-Sennet loads small, safe programs into the Linux kernel that hook into the networking stack (Traffic Control layer). These programs aggregate metrics and send them to userspace asynchronously, ensuring your application performance is never impacted.
-
-```rust
-// Simplified view of what happens in the kernel
-fn handle_ingress(skb: SkBuff) -> Result<Action, Error> {
-    let packet = skb.parse()?;
-    metrics.increment(packet.protocol, packet.len);
-    Ok(Action::Continue)
-}
-```
+The streaming deployment separates PostgreSQL metadata, Kafka ingestion and ClickHouse analytics. Local SQLite is for development. Production capacity is workload-dependent and has not been established by the repository's unit tests.

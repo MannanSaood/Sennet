@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/Button";
-import { useTheme } from "@/context/ThemeContext";
+import { useTheme } from "@/hooks/useTheme";
 import { Moon, Sun, Menu, X, Shield, Terminal } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
@@ -9,8 +9,9 @@ import { cn } from "@/lib/utils";
 export function Navbar() {
     const { theme, setTheme } = useTheme();
     const [isScrolled, setIsScrolled] = useState(false);
-    const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+    const [menuPath, setMenuPath] = useState<string | null>(null);
     const location = useLocation();
+    const mobileMenuOpen = menuPath === location.pathname;
 
     // Handle scroll effect
     useEffect(() => {
@@ -20,11 +21,6 @@ export function Navbar() {
         window.addEventListener("scroll", handleScroll);
         return () => window.removeEventListener("scroll", handleScroll);
     }, []);
-
-    // Close mobile menu on route change
-    useEffect(() => {
-        setMobileMenuOpen(false);
-    }, [location.pathname]);
 
     const navLinks = [
         { name: "Features", href: "/#features" },
@@ -99,7 +95,7 @@ export function Navbar() {
                     <Button
                         variant="ghost"
                         size="icon"
-                        onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+                        onClick={() => setMenuPath(mobileMenuOpen ? null : location.pathname)}
                     >
                         {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
                     </Button>

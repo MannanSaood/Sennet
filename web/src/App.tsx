@@ -1,71 +1,15 @@
-import { Suspense } from 'react'
-import { Routes, Route } from 'react-router-dom'
-import { HomePage } from '@/pages/home/HomePage'
-import { DocsPage } from '@/pages/docs/DocsPage'
-import { LoginPage } from '@/pages/auth/LoginPage'
-import { RegisterPage } from '@/pages/auth/RegisterPage'
-import { ProtectedRoute } from '@/components/auth/ProtectedRoute'
-import { DashboardPage } from '@/pages/dashboard/DashboardPage'
-import { LiveTrafficPage } from '@/pages/dashboard/LiveTrafficPage'
-import { ServiceMapPage } from '@/pages/dashboard/ServiceMapPage'
-import { SettingsPage } from '@/pages/dashboard/SettingsPage'
-import { NotFoundPage } from '@/pages/NotFoundPage'
-import { ErrorBoundary } from '@/components/ui/ErrorBoundary'
-import { PageLoader } from '@/components/ui/PageLoader'
-import { ScrollToHashElement } from '@/components/ui/ScrollToHashElement'
-
-function App() {
-  return (
-    <ErrorBoundary>
-      <Suspense fallback={<PageLoader />}>
-        <ScrollToHashElement />
-        <Routes>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/docs" element={<DocsPage />} />
-          <Route path="/docs/*" element={<DocsPage />} />
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/register" element={<RegisterPage />} />
-
-          {/* Dashboard Routes */}
-          <Route
-            path="/dashboard"
-            element={
-              <ProtectedRoute>
-                <DashboardPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/dashboard/traffic"
-            element={
-              <ProtectedRoute>
-                <LiveTrafficPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/dashboard/map"
-            element={
-              <ProtectedRoute>
-                <ServiceMapPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/dashboard/settings"
-            element={
-              <ProtectedRoute>
-                <SettingsPage />
-              </ProtectedRoute>
-            }
-          />
-
-          {/* 404 Catch-all */}
-          <Route path="*" element={<NotFoundPage />} />
-        </Routes>
-      </Suspense>
-    </ErrorBoundary>
-  )
-}
-
-export default App
+import { Suspense, lazy } from 'react';
+import { Routes, Route } from 'react-router-dom';
+import { ProtectedRoute } from '@/components/auth/ProtectedRoute';
+import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
+import { PageLoader } from '@/components/ui/PageLoader';
+import { ScrollToHashElement } from '@/components/ui/ScrollToHashElement';
+const HomePage=lazy(()=>import('@/pages/home/HomePage').then(m=>({default:m.HomePage})));
+const DocsPage=lazy(()=>import('@/pages/docs/DocsPage').then(m=>({default:m.DocsPage})));
+const LoginPage=lazy(()=>import('@/pages/auth/LoginPage').then(m=>({default:m.LoginPage})));
+const RegisterPage=lazy(()=>import('@/pages/auth/RegisterPage').then(m=>({default:m.RegisterPage})));
+const Explorer=lazy(()=>import('@/features/observability/Explorer').then(m=>({default:m.Explorer})));
+const SettingsPage=lazy(()=>import('@/pages/dashboard/SettingsPage').then(m=>({default:m.SettingsPage})));
+const Monitors=lazy(()=>import('@/features/observability/Monitors').then(m=>({default:m.Monitors})));
+const NotFoundPage=lazy(()=>import('@/pages/NotFoundPage').then(m=>({default:m.NotFoundPage})));
+export default function App(){return <ErrorBoundary><Suspense fallback={<PageLoader/>}><ScrollToHashElement/><Routes><Route path="/" element={<HomePage/>}/><Route path="/docs/*" element={<DocsPage/>}/><Route path="/login" element={<LoginPage/>}/><Route path="/register" element={<RegisterPage/>}/><Route path="/dashboard" element={<ProtectedRoute><Explorer/></ProtectedRoute>}/>{[['traces','trace'],['logs','log'],['metrics','metric'],['traffic','flow'],['agents','agent'],['finance','finance']].map(([path,signal])=><Route key={path} path={'/dashboard/'+path} element={<ProtectedRoute><Explorer key={signal} signal={signal}/></ProtectedRoute>}/>)}<Route path="/dashboard/map" element={<ProtectedRoute><Explorer topology/></ProtectedRoute>}/><Route path="/dashboard/settings" element={<ProtectedRoute><SettingsPage/></ProtectedRoute>}/><Route path="/dashboard/alerts" element={<ProtectedRoute><Monitors/></ProtectedRoute>}/><Route path="*" element={<NotFoundPage/>}/></Routes></Suspense></ErrorBoundary>}

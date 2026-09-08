@@ -1,36 +1,10 @@
-import { DashboardSidebar } from "./DashboardSidebar";
-import { useAuth } from "@/context/AuthContext";
-import { UserCircle } from "lucide-react";
-
+import { NavLink, Link } from 'react-router-dom';
+import { Activity, Layers, Network, Workflow, Landmark, Terminal, Settings, Bell, LayoutDashboard, ScrollText, ChartNoAxesCombined, LogOut } from 'lucide-react';
+import { useAuth } from '@/hooks/useAuth';
+const links = [
+ ['/dashboard','Overview',LayoutDashboard], ['/dashboard/traces','Traces',Layers], ['/dashboard/logs','Logs',ScrollText], ['/dashboard/metrics','Metrics',ChartNoAxesCombined], ['/dashboard/traffic','Network flows',Network], ['/dashboard/map','Service map',Workflow], ['/dashboard/agents','Agent runs',Terminal], ['/dashboard/finance','Finance',Landmark], ['/dashboard/alerts','Monitors',Bell], ['/dashboard/settings','Workspace',Settings],
+] as const;
 export function DashboardLayout({ children }: { children: React.ReactNode }) {
-    const { user } = useAuth();
-
-    return (
-        <div className="min-h-screen bg-dark-bg flex">
-            <DashboardSidebar />
-
-            <div className="flex-1 flex flex-col min-w-0 bg-[#0B101E]"> {/* Slightly different bg for content area contrast */}
-
-                {/* Top Header */}
-                <header className="h-16 flex items-center justify-between px-8 border-b border-dark-border bg-dark-bg sticky top-0 z-10">
-                    <h1 className="text-xl font-semibold text-white">Dashboard</h1>
-
-                    <div className="flex items-center gap-4">
-                        <div className="flex flex-col items-end hidden sm:flex">
-                            <span className="text-sm font-medium text-white">{user?.name || "User"}</span>
-                            <span className="text-xs text-text-secondary uppercase">{user?.role}</span>
-                        </div>
-                        <div className="w-10 h-10 rounded-full bg-dark-surface border border-dark-border flex items-center justify-center text-text-secondary">
-                            <UserCircle className="w-6 h-6" />
-                        </div>
-                    </div>
-                </header>
-
-                {/* Content */}
-                <main className="flex-1 p-8 overflow-y-auto">
-                    {children}
-                </main>
-            </div>
-        </div>
-    );
+ const {user,logout}=useAuth();
+ return <div className="workspace"><aside className="side-rail"><Link className="brand" to="/"><Activity/>sennet<span className="version-pill">02</span></Link><div className="workspace-label"><span className="status-dot"/><span title={user?.tenant}>{user?.tenant}</span></div><p className="nav-label">INVESTIGATE</p><nav aria-label="Workspace">{links.map(([url,label,Icon])=><NavLink key={url} to={url} end><Icon size={17}/>{label}</NavLink>)}</nav><div className="rail-bottom"><Link to="/docs">Documentation ↗</Link><button onClick={()=>void logout()}><LogOut size={15}/> Sign out</button></div></aside><div className="workspace-main"><header className="workspace-header"><span><span className="muted">Workspace / </span> Investigation</span><span className="role-pill">{user?.role}</span></header><main className="work-content">{children}</main></div></div>;
 }

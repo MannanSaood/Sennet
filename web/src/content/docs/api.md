@@ -1,52 +1,23 @@
-# API Reference
+# API and event contracts
 
-The Sennet Control Plane exposes a REST/gRPC API for programmatic access to your data.
+All application endpoints require a bearer credential. Roles are `ingest`, `reader` or `admin`. A tenant is derived from the verified credential and overrides any supplied tenant field.
 
-## Base URL
-`https://api.sennet.dev/v1`
+| Endpoint | Function |
+|---|---|
+| GET /api/session | Verified tenant, subject and role |
+| GET /api/agents | Tenant-scoped collector inventory |
+| GET /api/events | Bounded event search and cursor pagination |
+| POST /api/events | Durable event batch ingestion |
+| POST /v1/traces, /v1/logs, /v1/metrics | OTLP/HTTP JSON or protobuf |
+| GET/POST/DELETE /api/keys | Admin key metadata, creation and revocation |
+| GET/POST/DELETE /api/dashboards | Saved investigation views |
+| GET/POST/DELETE /api/alerts | Internal error-count monitors |
+| GET /api/finance/reconciliation | Bounded transaction sequence inspection |
 
-## Authentication
-All requests must include the `Authorization` header:
-`Authorization: Bearer <YOUR_API_KEY>`
+Event queries accept `from` and `to` as epoch milliseconds, `signal`, `service`, `trace_id`, `search`, `limit` (1–1000), and `cursor`. Windows must not exceed 30 days. Returned `next_cursor` indicates more results. Charts derived from a page describe that page, not the full data set.
 
-## Endpoints
+A domain event requires a stable `id`, `time`, `signal`, `service`, `name`, `status`, `duration_ms`, `value` and string-valued `attributes`. Supported signals: trace, log, metric, flow, agent and finance. Trace/span/parent IDs enable causality. Retried events retain both ID and timestamp. Batches contain 1–1000 records and at most 4 MiB decoded bytes.
 
-### Get Agents
-List all active agents in your fleet.
+Finance events require transaction_id, state, a three-letter currency, and an exact decimal amount string in attributes. Sequence and source identifiers support gap inspection. Never encode money as binary floating point. The system is not an accounting ledger.
 
-`GET /agents`
-
-**Response:**
-```json
-[
-  {
-    "id": "agent_123",
-    "hostname": "prod-web-01",
-    "ip": "10.0.1.5",
-    "status": "online",
-    "version": "0.1.3"
-  }
-]
-```
-
-### Get Metrics
-Query aggregated metrics.
-
-`GET /metrics?from=now-1h&to=now`
-
-**Parameters:**
-- `query`: PromQL-compatible query string
-- `from`: Start timestamp
-- `to`: End timestamp
-
-**Response:**
-```json
-{
-  "data": [
-    {
-       "timestamp": 167888221,
-       "value": 4500
-    }
-  ]
-}
-```
+OTLP metrics currently accept gauge, sum and explicit histogram records. Other metric types return an explicit unsupported error. Collector queues must preserve unacknowledged data; success means the configured durable boundary accepted the batch, not that a query has already indexed it.

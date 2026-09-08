@@ -2,6 +2,8 @@ package correlation
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/sennet/sennet/backend/cloud"
@@ -32,6 +34,7 @@ func (e *Engine) SyncCosts(ctx context.Context, days int) error {
 	endDate := time.Now()
 	startDate := endDate.AddDate(0, 0, -days)
 
+	var failures []error
 	for _, id := range e.registry.List() {
 		provider, ok := e.registry.Get(id)
 		if !ok {
@@ -40,11 +43,12 @@ func (e *Engine) SyncCosts(ctx context.Context, days int) error {
 
 		costs, err := provider.FetchCosts(ctx, startDate, endDate)
 		if err != nil {
+			failures = append(failures, fmt.Errorf("provider %s: %w", id, err))
 			continue
 		}
 
 		for _, cost := range costs {
-			e.database.SaveEgressCost(
+			err := e.database.SaveEgressCost(
 				string(provider.Name()),
 				cost.Date.Format("2006-01-02"),
 				cost.Service,
@@ -52,10 +56,13 @@ func (e *Engine) SyncCosts(ctx context.Context, days int) error {
 				cost.CostUSD,
 				cost.BytesOut,
 			)
+			if err != nil {
+				failures = append(failures, fmt.Errorf("persist provider %s: %w", id, err))
+			}
 		}
 	}
 
-	return nil
+	return errors.Join(failures...)
 }
 
 func (e *Engine) GetCostSummary(startDate, endDate string) (*CostSummary, error) {

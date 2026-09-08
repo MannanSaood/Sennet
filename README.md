@@ -1,146 +1,81 @@
-<div align="center">
-  <img src="https://capsule-render.vercel.app/api?type=waving&color=auto&height=250&section=header&text=Sennet&fontSize=80&animation=fadeIn&fontAlignY=35&desc=Deep%20Network%20Observability%20and%20Cloud%20Cost%20Intelligence&descAlignY=55&descAlign=50" alt="Sennet Header" />
-</div>
+# Sennet
 
----
+Sennet connects application traces, logs, metrics, agent executions and financial workflow events in one self-hosted investigation workspace.
 
-# Sennet (Sentinel Network)
+The repository now includes a tenant-scoped control plane, OTLP/HTTP ingestion (JSON and protobuf), a durable local development store, a Kafka-to-ClickHouse streaming path, a React investigation UI, and a Linux network agent. **Production capacity and high availability must be measured on your deployment.** The compose stack is a single-replica evaluation environment.
 
-![Build Status](https://img.shields.io/github/actions/workflow/status/MannanSaood/Sennet/release.yml?style=flat-square)
-![Platform](https://img.shields.io/badge/platform-linux--amd64%20%7C%20arm64-blue?style=flat-square)
-![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
-![Version](https://img.shields.io/github/v/release/MannanSaood/Sennet?style=flat-square)
+## Run locally
 
+Requirements: Go 1.24+, Node 22+, Python 3 (optional fixture generator).
 
---- 
-**Sennet** is a lightweight, eBPF-powered network observability agent designed for the modern cloud. It provides "X-Ray Vision" into your Linux servers, analyzing traffic at the kernel level without performance overhead.
+Generate a random bootstrap credential and put it in your shell as `INIT_API_KEY`; use `sk_` followed by at least 32 random hexadecimal characters. Do not commit it.
 
-Unlike traditional tools that require complex sidecars or heavy instrumentation, Sennet is a single binary that drops in and starts streaming real-time metrics instantly.
-
----
-
-## Architecture
-
-Sennet uses a distributed agent-server architecture. The Agent sits on the edge (your servers), hooking into the kernel using **eBPF (Extended Berkeley Packet Filter)** to capture traffic stats with near-zero CPU impact.
-
-```mermaid
-graph TD
-    subgraph "Your Infrastructure (Edge)"
-        A[Linux Kernel] -- "eBPF (TC Hook)" --> B(Sennet Agent);
-        B -- "Filters & Aggregates" --> B;
-    end
-    
-    subgraph "Control Plane (Cloud)"
-        B -- "gRPC / Heartbeat" --> C{Go Backend};
-        B -- "Metrics (OTLP)" --> D[Grafana Cloud];
-        C -- "Auth & Config" --> E[(SQLite DB)];
-    end
-
-    subgraph "User Interface"
-        User -- "CLI (sennet top)" --> B;
-        User -- "Web Dashboard" --> C;
-    end
+```powershell
+$env:INIT_API_KEY = 'sk_' + [guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')
+cd backend
+go run .
 ```
 
----
+In a second terminal:
 
-## Quick Start
-
-You can install Sennet on any supported Linux system (x86_64 or ARM64) with a single command.
-
-### One-Line Install
-```bash
-curl -sSL [https://raw.githubusercontent.com/MannanSaood/Sennet/main/install.sh](https://raw.githubusercontent.com/MannanSaood/Sennet/main/install.sh) | sudo bash
+```sh
+cd web
+npm ci
+npm run dev
 ```
 
-### Manual Installation
-If you prefer to install manually, download the latest binary from the [Releases Page](https://github.com/MannanSaood/Sennet/releases).
+Open http://localhost:5173 and connect using the bootstrap key. The development server proxies requests to localhost:8080. The backend binds to loopback by default. Create an **ingestion-only** key in Workspace for collectors; use a reader key for read-only users.
 
-```bash
-# 1. Download
-wget [https://github.com/MannanSaood/Sennet/releases/latest/download/sennet-linux-amd64](https://github.com/MannanSaood/Sennet/releases/latest/download/sennet-linux-amd64) -O sennet
+For optional, clearly identified evaluation data, set `SENNET_API_KEY` to an ingestion key and run:
 
-# 2. Install
-chmod +x sennet
-sudo mv sennet /usr/local/bin/
-
-# 3. Start
-sudo sennet start
+```sh
+python examples/send_fixture.py
 ```
 
----
+## Streaming evaluation stack
 
-## CLI Usage
+Set `INIT_API_KEY`, `SENNET_POSTGRES_PASSWORD` and `SENNET_CLICKHOUSE_PASSWORD` to random values (hexadecimal passwords avoid URL escaping in the compose DSN), then:
 
-Sennet comes with a built-in CLI for real-time local monitoring.
+```sh
+docker compose -f deploy/compose.yaml up --build --wait
+```
 
-| Command | Description |
-| :--- | :--- |
-| `sudo sennet start` | Starts the background service agent. |
-| `sudo sennet status` | Checks the health, uptime, and backend connection status. |
-| `sudo sennet top` | **Live Matrix Mode:** Shows real-time bandwidth, top flows, and drop rates in your terminal. |
-| `sudo sennet upgrade` | Self-updates the binary to the latest version atomically. |
+Open http://localhost:8088. Data persists in Docker volumes. PostgreSQL stores identities and configuration; Kafka provides durable ingestion; the consumer batches observations into ClickHouse. Browser queries use parameterized tenant filters. Never expose the internal database or broker ports publicly.
 
----
+For managed production services, configure PostgreSQL TLS, Kafka TLS/SASL, ClickHouse HTTPS, a TLS ingress, topic replication/minimum ISR, storage replicas, backups and tenant budgets. `SENNET_ENV=production` rejects startup unless PostgreSQL, Kafka and ClickHouse are configured. The shipped compose file does not establish HA or a throughput guarantee.
 
-## Configuration
+## Collect signals
 
-Configuration is handled via `/etc/sennet/config.yaml`. The installer generates a default file for you.
+- OTLP/HTTP: `/v1/traces`, `/v1/logs`, `/v1/metrics`; bearer ingestion key; JSON or protobuf; gzip supported.
+- Domain events: `POST /api/events`, 1–1,000 records, up to 4 MiB decoded; stable IDs required for replay.
+- Collector example: [deploy/otel-collector.yaml](deploy/otel-collector.yaml), with a persistent exporter queue. Set its endpoint and scoped key explicitly.
+- Python instrumentation: [sdk/python/sennet.py](sdk/python/sennet.py) provides nested spans, context propagation, decimal financial events and a disk outbox.
+- Linux network collector: build `agent`, configure it, and run `sudo sennet start`. `sennet top` displays real local rates/history; `sennet top --json` prints a snapshot. Windows does not support local eBPF collection.
 
 ```yaml
 # /etc/sennet/config.yaml
-
-authentication:
-  api_key: "sk_live_xxxxxxxx"  # Your API Key
-
-upstream:
-  control_plane: "[https://api.sennet.io](https://api.sennet.io)"
-  telemetry_endpoint: "[https://otlp.grafana.net/v1/metrics](https://otlp.grafana.net/v1/metrics)"
-
-agent:
-  interface: "auto"   # "auto" detects default route, or specify "eth0"
-  log_level: "info"   # debug, info, warn, error
+api_key: "sk_REPLACE_WITH_INGEST_KEY"
+server_url: "https://your-sennet-server.example"
+interface: "eth0"
+heartbeat_interval_secs: 30
+state_dir: "/var/lib/sennet"
+log_level: "info"
 ```
 
----
+The agent spools unacknowledged observations (20 MiB cap), reports unavailable collection explicitly, uses network deadlines and preserves queued records across restarts. Optional socket/drop probes using kernel-specific layouts are disabled by default; enabling `SENNET_EXPERIMENTAL_KERNEL_PROBES=true` requires validation against your kernel. Do not mistake BTF detection for verified CO-RE portability.
 
-## Roadmap
+## Interfaces and limits
 
-| Phase | Feature | Status |
-| :--- | :--- | :--- |
-| **Phase 1** | **Foundation** (Go Backend, Rust Agent, gRPC) | **Completed** |
-| **Phase 2** | **The Core** (eBPF TC Classifier, RingBuf Events) | **Completed** |
-| **Phase 3** | **Distribution** (Cross-Compile, CI/CD, Installer) |**Completed** |
-| **Phase 4** | **Operations** (CLI `top` view, Self-Updater) | **In Progress** |
-| **Phase 5** | **Web UI** (React Dashboard, Agent Management) | *Planned* |
+The workspace includes searchable/paginated explorers, service dependencies, trace waterfalls, saved views, scoped key creation/revocation and internal error-count monitors. Monitors evaluate every 30 seconds in bounded batches; no outbound messages are sent. Explorers clearly label page-based summaries and partial trace results. Financial events preserve decimal strings; this is operational observability, not a ledger.
 
----
+Team administration, commercial billing and direct cloud cost-provider integrations are not enabled in the new application. Legacy implementations remain isolated from the production routes. This prevents unimplemented integrations or global legacy credentials from being represented as working capabilities.
 
-## Development
+## Verification and migration
 
-### Prerequisites
-* **Rust** (latest stable)
-* **Go** (1.21+)
-* **Buf** (Protobuf generation)
-* **Linux Kernel 5.15+** (Required for CO-RE eBPF)
-
-### Building Locally
-```bash
-# Clone the repo
-git clone [https://github.com/MannanSaood/Sennet.git](https://github.com/MannanSaood/Sennet.git)
-cd Sennet
-
-# Build the Agent
-cd agent
-cargo build --release
-
-# Run the Backend
-cd ../backend
-go run main.go
+```sh
+cd backend && go test ./...
+cd ../agent && cargo test --locked
+cd ../web && npm run lint && npm run build
 ```
 
----
-
-## License
-
-This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
+See [implementation status](docs/implementation-status.md), [deployment and migration](docs/DEPLOY.md), and [architecture](docs/platform-architecture-proposal.md). Legacy SQLite data and keys are **not automatically assigned to a new tenant**. Keep the old database for controlled export and explicit ownership mapping; do not copy global credentials into shared production.

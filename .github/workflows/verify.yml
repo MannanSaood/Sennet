@@ -1,0 +1,58 @@
+name: Verify
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - run: go test -race ./...
+        working-directory: backend
+      - run: go vet ./...
+        working-directory: backend
+  agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --locked
+        working-directory: agent
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22', cache: npm, cache-dependency-path: web/package-lock.json}
+      - run: npm ci
+        working-directory: web
+      - run: npm run lint
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+  sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python -m unittest -v
+        working-directory: sdk/python
+  streaming:
+    runs-on: ubuntu-latest
+    env:
+      INIT_API_KEY: sk_ci_evaluation_only_12345678901234567890
+      SENNET_API_KEY: sk_ci_evaluation_only_12345678901234567890
+      SENNET_POSTGRES_PASSWORD: ci_database_only
+      SENNET_CLICKHOUSE_PASSWORD: ci_analytics_only
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose -f deploy/compose.yaml up --build --wait --wait-timeout 240
+      - run: python examples/send_fixture.py
+      - run: python tests/streaming_smoke.py
+      - if: always()
+        run: docker compose -f deploy/compose.yaml logs --tail 50
+      - if: always()
+        run: docker compose -f deploy/compose.yaml down
