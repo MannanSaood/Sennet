@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	logs "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	metrics "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
@@ -248,12 +249,30 @@ func (a *API) otlp(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(events) > 0 {
 		if err = validateEvents(principal(r).Tenant, events); err != nil {
+			if a.Metrics != nil {
+				a.Metrics.RejectedEvents.Add(uint64(len(events)))
+			}
 			problem(w, 400, err.Error())
 			return
 		}
 		if err = a.Ingest.Write(r.Context(), events); err != nil {
-			problem(w, 503, "durable ingest unavailable")
+			if a.Metrics != nil {
+				a.Metrics.RejectedEvents.Add(uint64(len(events)))
+			}
+			if errors.Is(err, ErrIngestSaturated) {
+				w.Header().Set("Retry-After", "1")
+				problem(w, 429, "ingest queue saturated; retry with the same event IDs")
+				return
+			}
+			if errors.Is(err, ErrProducerBatchTooLarge) {
+				problem(w, 413, "batch exceeds configured Kafka append bound; split the request")
+				return
+			}
+			problem(w, 503, "durable ingest unavailable; retry with the same event IDs")
 			return
+		}
+		if a.Metrics != nil {
+			a.Metrics.AcceptedEvents.Add(uint64(len(events)))
 		}
 	}
 	if binary {

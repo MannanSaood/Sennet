@@ -26,7 +26,7 @@ The website and workspace have been rebuilt around real queries: historical sear
 | DATA-01, DATA-02 | Implemented foundation | Persisted tenant inventory and historical telemetry; SQL/ClickHouse query contracts. Long-term rollups and per-tenant retention policies remain. |
 | DATA-03 | Implemented | Invalid identity and persistence failures cannot receive success. Telemetry uses a separate durable acknowledgement. |
 | DATA-04 | Partial | OTLP HTTP JSON/protobuf plus domain ingestion. Native backend OTLP/gRPC, exponential histograms and complete span-event semantics remain. Collector config accepts gRPC and forwards HTTP. |
-| DATA-05 | Partial | Bounded outboxes, Kafka batches, commit-after-write, idempotent retries. Poison records stop consumption for repair; no automated dead-letter workflow, lag UI or object-storage replay tier. |
+| DATA-05 | Partial | Bounded outboxes and Kafka producer admission, commit-after-archive/analytics/dead-letter, idempotent retries, consumer lag metrics, poison reason codes, authenticated inspection and corrected replay. Only a local filesystem archive exists; cloud object storage and a lag UI remain. |
 | AGENT-01, AGENT-02 | Implemented, Linux validation pending | Start alias; redesigned real-source TUI with explicit unsupported platform error. |
 | AGENT-03 | Partial | No zero fallback; map-read errors propagate; blocking disk/HTTP off async executor, deadlines, retry retention and quarantine. Export failure counters and shutdown drain tests remain. |
 | AGENT-04 | Partial | Exclusive daemon lock and replacement map pins; pin failures propagate. Restart/load rollback still requires privileged Linux tests. |
@@ -37,7 +37,7 @@ The website and workspace have been rebuilt around real queries: historical sear
 | UI-01, UI-02, UI-03, UI-05 | Implemented | Real queries, freshness/error states, corrected hooks, one current credential source and cache reset on identity changes. |
 | UI-04 | Partial | Working saved views, scoped keys and monitors. Team invitations, billing and notifications are explicitly unavailable. |
 | UI-06 | Partial | Range/filter explorers, waterfall, page-derived dependencies, full-window analytics and saved views. Large graph rendering, custom dashboard composition, flamegraphs, metric algebra and anomaly drilldowns remain. |
-| OPS-01 | Partial | PostgreSQL/Kafka/ClickHouse path and bounded queries. API/query/consumer currently share a process; independent deployment roles, global admission and replicated analytics topology remain. |
+| OPS-01 | Partial | Independently deployable gateway, storage-consumer, and query/control roles plus local all-in-one; replicated/distributed ClickHouse DDL and explicit Kafka topic defaults are supplied. Multi-node failure, global admission, and HA remain unproven. |
 | OPS-02 | Partial | Versioned initial schema and documented safe cutover. Restore, rolling migration, sustained load and disaster recovery are unproven. |
 | QA-01 | Partial | Local regression suites and clean web lint/build; CI adds race/vet, Linux agent and streaming smoke jobs. CI infrastructure jobs have not been executed here. |
 | DOC-01 | Implemented for new path | Replaced quickstart/deployment/capability docs with actual configuration and limits. |
@@ -46,7 +46,7 @@ The website and workspace have been rebuilt around real queries: historical sear
 ## Release gates still required
 
 1. Run the Compose streaming smoke test in Docker. The included stack has single replicas and twelve Kafka partitions; it is an evaluation topology. Deploy Kafka replication/minimum in-sync replicas and ClickHouse replicated/distributed tables before claiming high availability.
-2. Separate ingest, query and consumer processes; add consumer lag, saturation, rejected observations, queue age and query-cost metrics. Implement tenant quotas and explicit dead-letter repair/replay workflows.
+2. Validate the separated roles under sustained load; add distributed tenant quotas, queue-age and query-cost metrics, lag history, and production object-storage archive/recovery.
 3. Benchmark measured event sizes, cardinality and concurrent queries. Record sustained accepted/stored throughput, p95/p99 query latency, recovery time, duplicate rate, resource use and cost. No throughput number is claimed from a 300-event smoke test.
 4. Run Linux kernel/verifier, restart/pin lifecycle and terminal tests across supported architectures. Replace layout-dependent probes before enabling them by default.
 5. Rehearse backup restoration and schema upgrades with scoped historical data. Keep legacy databases offline until ownership mapping and secret migration are approved and tested.
