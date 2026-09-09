@@ -108,7 +108,7 @@ func TestKeyLifecycleScopesAndNoSecretListing(t *testing.T) {
 		t.Fatal("revoked key accepted")
 	}
 	var stored string
-	_ = s.db.QueryRow(`SELECT hash FROM platform_keys WHERE id=?`, created.Metadata.ID).Scan(&stored)
+	_ = s.db.QueryRow(`SELECT hash FROM platform_credentials WHERE id=?`, created.Metadata.ID).Scan(&stored)
 	if stored == created.Key || len(stored) != 64 {
 		t.Fatal("credential not hashed")
 	}

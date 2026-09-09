@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"github.com/sennet/sennet/backend/auth"
 	"github.com/sennet/sennet/backend/platform"
@@ -24,6 +25,8 @@ func env(name, fallback string) string {
 func main() {
 	port := flag.String("port", env("PORT", "8080"), "HTTP port")
 	path := flag.String("db", env("SENNET_DATABASE_URL", "./sennet-platform.db"), "SQLite path (local) or PostgreSQL URL")
+	migrateLegacy := flag.Bool("migrate-legacy", false, "run the explicit ownership/quarantine migration and exit")
+	ownershipMap := flag.String("ownership-map", "", "JSON ownership mapping used only with -migrate-legacy")
 	flag.Parse()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -32,6 +35,26 @@ func main() {
 		log.Fatal("metadata store unavailable: ", err)
 	}
 	defer store.Close()
+	if *migrateLegacy {
+		mappings := []platform.OwnershipMapping{}
+		if *ownershipMap != "" {
+			data, readErr := os.ReadFile(*ownershipMap)
+			if readErr != nil {
+				log.Fatal("ownership map unavailable: ", readErr)
+			}
+			if jsonErr := json.Unmarshal(data, &mappings); jsonErr != nil {
+				log.Fatal("invalid ownership map: ", jsonErr)
+			}
+		}
+		report, migrationErr := store.MigrateLegacy(ctx, mappings)
+		if migrationErr != nil {
+			log.Fatal("legacy migration failed: ", migrationErr)
+		}
+		if encodeErr := json.NewEncoder(os.Stdout).Encode(report); encodeErr != nil {
+			log.Fatal(encodeErr)
+		}
+		return
+	}
 	if key := os.Getenv("INIT_API_KEY"); key != "" {
 		if err = store.Seed(ctx, key, env("SENNET_BOOTSTRAP_TENANT", "local")); err != nil {
 			log.Fatal(err)
@@ -67,17 +90,22 @@ func main() {
 	api.Mode = mode
 	api.Brokers = brokers
 	api.Origins = strings.Split(env("SENNET_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"), ",")
+	proxies, proxyErr := platform.ParseTrustedProxies(os.Getenv("SENNET_TRUSTED_PROXIES"))
+	if proxyErr != nil {
+		log.Fatal("invalid SENNET_TRUSTED_PROXIES: ", proxyErr)
+	}
+	api.Proxies = proxies
 	if os.Getenv("FIREBASE_SERVICE_ACCOUNT_JSON") != "" || os.Getenv("FIREBASE_SERVICE_ACCOUNT_PATH") != "" {
 		fa, e := auth.NewFirebaseAuth()
 		if e != nil {
 			log.Fatal("configured Firebase auth failed: ", e)
 		}
-		api.Resolve = func(ctx context.Context, token string) (platform.Principal, error) {
+		api.Resolve = func(ctx context.Context, token, workspace string) (platform.Principal, error) {
 			verified, err := fa.VerifyToken(ctx, token)
 			if err != nil {
 				return platform.Principal{}, err
 			}
-			return platform.Principal{Tenant: "firebase:" + verified.UID, Subject: verified.UID, Role: "admin"}, nil
+			return store.PrincipalForHuman(ctx, "firebase", verified.UID, workspace)
 		}
 	}
 	server := &http.Server{Addr: env("SENNET_BIND", "127.0.0.1") + ":" + *port, Handler: api.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16384}
