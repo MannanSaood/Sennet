@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,19 +14,6 @@ import (
 	"time"
 )
 
-func testResolver(a, b string) Resolver {
-	return func(_ context.Context, token string) (Principal, error) {
-		switch token {
-		case a:
-			return Principal{Tenant: "a", Subject: "user:a", Role: "admin"}, nil
-		case b:
-			return Principal{Tenant: "b", Subject: "user:b", Role: "admin"}, nil
-		default:
-			return Principal{}, errors.New("invalid login session")
-		}
-	}
-}
-
 func fixture(t *testing.T) (*Store, http.Handler, string, string) {
 	t.Helper()
 	s, err := Open(filepath.Join(t.TempDir(), "test.db"))
@@ -35,10 +21,15 @@ func fixture(t *testing.T) (*Store, http.Handler, string, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.Close() })
-	a := "login-session-a"
-	b := "login-session-b"
+	a := "sk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	b := "sk_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if err = s.Seed(context.Background(), a, "a"); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Seed(context.Background(), b, "b"); err != nil {
+		t.Fatal(err)
+	}
 	api := NewAPI(s, s, s)
-	api.Resolve = testResolver(a, b)
 	return s, api.Handler(), a, b
 }
 func call(h http.Handler, method, path, key string, body any) *httptest.ResponseRecorder {
@@ -87,16 +78,45 @@ func TestIsolationPersistenceAndReplay(t *testing.T) {
 		t.Fatal(count, err)
 	}
 }
-func TestLoginOnlyAuthenticationAndNoKeyEndpoint(t *testing.T) {
-	_, h, session, _ := fixture(t)
-	if w := call(h, "GET", "/api/session", session, nil); w.Code != 200 || !strings.Contains(w.Body.String(), `"subject":"user:a"`) {
+func TestKeyLifecycleScopesAndNoSecretListing(t *testing.T) {
+	s, h, a, b := fixture(t)
+	if w := call(h, "GET", "/api/session", a, nil); w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	if w := call(h, "POST", "/api/events", "not-a-session", map[string]any{"events": []Event{sample("2")}}); w.Code != 401 {
 		t.Fatal("unverified credential accepted", w.Code)
 	}
-	if w := call(h, "GET", "/api/keys", session, nil); w.Code != 404 {
-		t.Fatal("removed API-key endpoint remains available", w.Code)
+	w := call(h, "POST", "/api/keys", a, map[string]any{"name": "collector", "role": "ingest", "expires": time.Now().Add(time.Hour).UnixMilli()})
+	if w.Code != 201 {
+		t.Fatal(w.Body.String())
+	}
+	var created struct {
+		Metadata Key    `json:"metadata"`
+		Key      string `json:"key"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &created)
+	for _, token := range []string{a, b} {
+		w = call(h, "GET", "/api/keys", token, nil)
+		if strings.Contains(w.Body.String(), created.Key) || strings.Contains(w.Body.String(), a) {
+			t.Fatal("raw credential disclosed")
+		}
+	}
+	if w = call(h, "GET", "/api/events", created.Key, nil); w.Code != 403 {
+		t.Fatal("ingest can read")
+	}
+	if w = call(h, "DELETE", "/api/keys?id="+created.Metadata.ID, b, nil); w.Code != 404 {
+		t.Fatal("cross-tenant revoke")
+	}
+	if w = call(h, "DELETE", "/api/keys?id="+created.Metadata.ID, a, nil); w.Code != 204 {
+		t.Fatal(w.Body.String())
+	}
+	if w = call(h, "POST", "/api/events", created.Key, map[string]any{"events": []Event{sample("2")}}); w.Code != 401 {
+		t.Fatal("revoked key accepted")
+	}
+	var stored string
+	_ = s.db.QueryRow(`SELECT hash FROM platform_credentials WHERE id=?`, created.Metadata.ID).Scan(&stored)
+	if stored == created.Key || len(stored) != 64 {
+		t.Fatal("credential not hashed")
 	}
 }
 func TestHeartbeatAndResourceIsolation(t *testing.T) {
@@ -154,7 +174,7 @@ func TestOTLPJSONHexIDs(t *testing.T) {
 		t.Fatal(w.Body.String())
 	}
 }
-func TestOversizedBodyAndRemovedAPIKeySignature(t *testing.T) {
+func TestOversizedBodyAndInvalidAPIKeySignature(t *testing.T) {
 	_, h, a, _ := fixture(t)
 	r := httptest.NewRequest("POST", "/api/events", strings.NewReader(strings.Repeat("a", (4<<20)+1)))
 	r.Header.Set("Authorization", "Bearer "+a)
@@ -168,7 +188,7 @@ func TestOversizedBodyAndRemovedAPIKeySignature(t *testing.T) {
 	r.Header.Set("X-Sennet-Signature", "bad")
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, r)
-	if w.Code != 400 {
+	if w.Code != 401 {
 		t.Fatal(w.Code)
 	}
 }

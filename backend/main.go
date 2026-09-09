@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"flag"
 	"github.com/sennet/sennet/backend/auth"
@@ -56,7 +57,7 @@ func archive() platform.Archive {
 	}
 	return nil
 }
-func configureIdentity(api *platform.API) {
+func configureIdentity(api *platform.API, store *platform.Store) {
 	if env("SENNET_AUTH_MODE", "firebase") == "development" {
 		if os.Getenv("SENNET_ENV") == "production" {
 			log.Fatal("development login sessions are forbidden in production")
@@ -65,35 +66,30 @@ func configureIdentity(api *platform.API) {
 		if len(token) < 24 {
 			log.Fatal("development auth requires SENNET_DEVELOPMENT_SESSION_TOKEN with at least 24 characters")
 		}
-		api.Resolve = func(_ context.Context, candidate string) (platform.Principal, error) {
+		api.Resolve = func(ctx context.Context, candidate, workspace string) (platform.Principal, error) {
 			if subtle.ConstantTimeCompare([]byte(candidate), []byte(token)) != 1 {
 				return platform.Principal{}, errors.New("invalid development login session")
 			}
-			return platform.Principal{Tenant: env("SENNET_DEVELOPMENT_TENANT", "local"), Subject: "development-login", Role: "admin"}, nil
+			return store.PrincipalForHuman(ctx, "development", "development-login", workspace)
 		}
 		return
 	}
 	if env("SENNET_AUTH_MODE", "firebase") != "firebase" {
 		log.Fatal("SENNET_AUTH_MODE must be firebase or development")
 	}
+	if os.Getenv("FIREBASE_SERVICE_ACCOUNT_JSON") == "" && os.Getenv("FIREBASE_SERVICE_ACCOUNT_PATH") == "" {
+		return
+	}
 	fa, err := auth.NewFirebaseAuth()
 	if err != nil {
 		log.Fatal("configured Firebase auth failed: ", err)
 	}
-	api.Resolve = func(ctx context.Context, token string) (platform.Principal, error) {
+	api.Resolve = func(ctx context.Context, token, workspace string) (platform.Principal, error) {
 		verified, err := fa.VerifyToken(ctx, token)
 		if err != nil {
 			return platform.Principal{}, err
 		}
-		tenant := "user:" + verified.UID
-		if claimed, ok := verified.Claims["tenant_id"].(string); ok && claimed != "" {
-			tenant = "tenant:" + claimed
-		}
-		role := "admin"
-		if claimed, ok := verified.Claims["role"].(string); ok && (claimed == "admin" || claimed == "reader" || claimed == "ingest") {
-			role = claimed
-		}
-		return platform.Principal{Tenant: tenant, Subject: "firebase:" + verified.UID, Role: role}, nil
+		return store.PrincipalForHuman(ctx, "firebase", verified.UID, workspace)
 	}
 }
 
@@ -168,10 +164,16 @@ func main() {
 	port := flag.String("port", env("PORT", "8080"), "HTTP/operator port")
 	dbPath := flag.String("db", env("SENNET_DATABASE_URL", "./sennet-platform.db"), "SQLite path (local) or PostgreSQL URL")
 	role := flag.String("role", env("SENNET_ROLE", "all"), "gateway, storage-consumer, query-control, or all")
+	migrateLegacy := flag.Bool("migrate-legacy", false, "run the explicit ownership/quarantine migration and exit")
+	ownershipMap := flag.String("ownership-map", "", "JSON ownership mapping used only with -migrate-legacy")
 	flag.Parse()
 	processPort = *port
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	if *migrateLegacy {
+		runMigration(ctx, *dbPath, *ownershipMap)
+		return
+	}
 	metrics := &platform.DataPlaneMetrics{}
 	switch *role {
 	case "gateway":
@@ -192,8 +194,44 @@ func baseAPI(store *platform.Store, telemetry platform.Telemetry, ingest platfor
 	api.Role, api.Mode, api.Metrics = role, mode, metrics
 	api.Origins = strings.Split(env("SENNET_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"), ",")
 	api.InternalToken = os.Getenv("SENNET_OPERATOR_TOKEN")
-	configureIdentity(api)
+	proxies, err := platform.ParseTrustedProxies(os.Getenv("SENNET_TRUSTED_PROXIES"))
+	if err != nil {
+		log.Fatal("invalid SENNET_TRUSTED_PROXIES: ", err)
+	}
+	api.Proxies = proxies
+	configureIdentity(api, store)
 	return api
+}
+func bootstrapStore(ctx context.Context, store *platform.Store) {
+	if key := os.Getenv("INIT_API_KEY"); key != "" {
+		if err := store.Seed(ctx, key, env("SENNET_BOOTSTRAP_TENANT", "local")); err != nil {
+			log.Fatal(err)
+		}
+	}
+}
+func runMigration(ctx context.Context, dbPath, ownershipMap string) {
+	store, err := platform.Open(dbPath)
+	if err != nil {
+		log.Fatal("metadata store unavailable: ", err)
+	}
+	defer store.Close()
+	mappings := []platform.OwnershipMapping{}
+	if ownershipMap != "" {
+		data, readErr := os.ReadFile(ownershipMap)
+		if readErr != nil {
+			log.Fatal("ownership map unavailable: ", readErr)
+		}
+		if jsonErr := json.Unmarshal(data, &mappings); jsonErr != nil {
+			log.Fatal("invalid ownership map: ", jsonErr)
+		}
+	}
+	report, err := store.MigrateLegacy(ctx, mappings)
+	if err != nil {
+		log.Fatal("legacy migration failed: ", err)
+	}
+	if err = json.NewEncoder(os.Stdout).Encode(report); err != nil {
+		log.Fatal(err)
+	}
 }
 func requireProduction(role, dbPath string, kafka, ch bool) {
 	if os.Getenv("SENNET_ENV") != "production" {
@@ -223,6 +261,7 @@ func runGateway(ctx context.Context, dbPath string, metrics *platform.DataPlaneM
 		log.Fatal("metadata store unavailable: ", err)
 	}
 	defer store.Close()
+	bootstrapStore(ctx, store)
 	producer := platform.NewKafkaProducer(cfg, metrics)
 	defer producer.Close()
 	ingest := platform.NewBoundedIngestor(producer, envInt("SENNET_INGEST_CONCURRENCY", 64), metrics)
@@ -246,6 +285,7 @@ func runQuery(ctx context.Context, dbPath string, metrics *platform.DataPlaneMet
 		log.Fatal("metadata store unavailable: ", err)
 	}
 	defer store.Close()
+	bootstrapStore(ctx, store)
 	if err = ch.Init(ctx); err != nil {
 		log.Fatal(err)
 	}
@@ -311,6 +351,7 @@ func runAll(ctx context.Context, dbPath string, metrics *platform.DataPlaneMetri
 		log.Fatal("metadata store unavailable: ", err)
 	}
 	defer store.Close()
+	bootstrapStore(ctx, store)
 	var telemetry platform.Telemetry = store
 	var ingest platform.Ingestor = store
 	mode := "local"

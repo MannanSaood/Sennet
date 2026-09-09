@@ -37,7 +37,6 @@ func TestProcessRoleRoutingAndAuthenticatedMetrics(t *testing.T) {
 	s, _, key, _ := fixture(t)
 	metrics := &DataPlaneMetrics{}
 	api := NewAPI(s, nil, s)
-	api.Resolve = testResolver(key, "")
 	api.Role = "gateway"
 	api.Metrics = metrics
 	api.InternalToken = "operator-secret"
@@ -58,7 +57,6 @@ func TestProcessRoleRoutingAndAuthenticatedMetrics(t *testing.T) {
 		t.Fatalf("authenticated metrics returned %d", w.Code)
 	}
 	query := NewAPI(s, s, nil)
-	query.Resolve = testResolver(key, "")
 	query.Role = "query-control"
 	query.DeadLetters = fakeDeadAdmin{}
 	if w = call(query.Handler(), "GET", "/api/dead-letter", key, nil); w.Code != 200 {

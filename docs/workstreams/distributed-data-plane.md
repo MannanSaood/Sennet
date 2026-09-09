@@ -5,15 +5,15 @@ Status: implemented foundation; high availability and production object storage 
 ## Changed contracts
 
 - Process selection is explicit through `SENNET_ROLE`: `gateway`, `storage-consumer`, `query-control`, or local `all`.
-- The gateway remains the tenant trust boundary. It verifies a login ID/session token, derives the tenant from verified identity claims, overwrites untrusted tenant values, and keeps HTTP event and OTLP/HTTP transports.
-- User-managed API keys, bootstrap-key seeding, key lifecycle endpoints, and API-key request signatures are removed. Production authentication is Firebase login; only non-production evaluation may use the fixed development session mode.
+- The gateway remains the tenant trust boundary. It authenticates the control-plane credential classes, resolves explicit organization/workspace ownership and roles, overwrites untrusted tenant values, and keeps HTTP event and OTLP/HTTP transports.
+- The merged security-control-plane contract supersedes this workstream's earlier login-only interim design. Human sessions, integration keys, collector enrollment credentials, and workload identities are distinct; secret material is returned once, collector credentials require versioned signing, and Firebase verification remains fail-closed through stored membership and role resolution.
 - Streaming success means synchronous Kafka `acks=all`, not ClickHouse persistence. An ambiguous broker response is retried with the identical event IDs.
 - Storage delivery is at least once. The consumer commits a fetched batch only after configured archive writes, ClickHouse writes, and poison dead-letter writes all succeed.
 - Event IDs and timestamps are immutable. ClickHouse uses tenant/time/ID replacement keys and query-time `FINAL`; repeat delivery/replay is storage-idempotent but not a claim of exactly-once Kafka delivery.
 - Partitioning is trace-affine for traced signals, source/account/entity-affine for finance, and tenant/service-affine otherwise. Only records sharing a partition key are ordered.
 - Producer admission is bounded. Saturation is a retryable 429; broker/durability failure is a retryable 503. Neither returns success.
 - Poison events move to a bounded-retention dead-letter topic with deterministic source-position IDs and reason codes. Publishing the dead letter is itself part of the source-offset commit boundary.
-- Dead-letter inspection/replay requires an administrator login session. Corrected replay preserves known tenant and event ID. Repeated replay is safe at storage.
+- Dead-letter inspection/replay requires an owner or administrator identity in the scoped workspace. Corrected replay preserves known tenant and event ID. Repeated replay is safe at storage.
 - `/live` is process liveness. `/ready`/`/health` are role-specific dependency readiness. `/internal/metrics` requires `SENNET_OPERATOR_TOKEN`.
 - `Archive` is an extension interface. Only an atomic, idempotent local filesystem implementation exists; there is no cloud-shaped fake.
 - `SENNET_CLICKHOUSE_INIT=local` creates the evaluation table. Production uses pre-provisioned local replicated and distributed tables with `SENNET_CLICKHOUSE_INIT=none`.
@@ -59,8 +59,8 @@ Local evidence on 2026-09-08:
 - Broker readiness is a bounded network reachability check; append acknowledgements remain the actual durability signal.
 - The provided cluster DDL requires deployment-specific ClickHouse Keeper and macros and has not established HA.
 - No sustained throughput, regional failover, restore-time, or retention-exhaustion result is claimed.
-- The existing Rust agent still has its historical API-key-shaped enrollment configuration and was intentionally not changed in this workstream. It cannot authenticate to the login-only gateway until a browser/device enrollment and refresh-token flow replaces that configuration; browser and session-aware SDK access work now.
+- The existing Rust agent was intentionally not changed in these workstreams. The control plane now provides short-lived collector enrollment and workload credentials, but wiring that enrollment/rotation protocol into the agent remains follow-up work.
 
 ## Migration notes
 
-Existing all-in-one streaming deployments must split credentials and ports by role, pre-create the dead-letter topic, deploy ClickHouse DDL, and keep the existing `sennet-storage-v1` group only when continuing its offsets is intentional. Run a new group for shadow validation. Remove `INIT_API_KEY` and `SENNET_BOOTSTRAP_TENANT`, configure Firebase Admin identity on every HTTP role, and have clients exchange login ID tokens rather than Sennet keys. Existing `platform_keys` rows may be retained for rollback, but the runtime no longer reads them and new databases do not create that table. Gateway clients keep their HTTP/OTLP endpoints and immutable IDs across 429/503 retries. Operators must protect the metrics token separately from user login sessions.
+Existing all-in-one streaming deployments must split credentials and ports by role, pre-create the dead-letter topic, deploy ClickHouse DDL, and keep the existing `sennet-storage-v1` group only when continuing its offsets is intentional. Run a new group for shadow validation. Follow the explicit ownership migration in `security-control-plane.md`; unmapped legacy records are quarantined instead of assigned globally. `INIT_API_KEY` is bootstrap-only, while normal clients use the credential class appropriate to humans, integrations, collectors, or workloads. Gateway clients keep their HTTP/OTLP endpoints and immutable IDs across 429/503 retries. Operators must protect the metrics token separately from application identities.

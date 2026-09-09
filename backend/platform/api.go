@@ -9,15 +9,13 @@ import (
 	"errors"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
-type Resolver func(context.Context, string) (Principal, error)
+type Resolver func(context.Context, string, string) (Principal, error)
 type API struct {
 	Store         *Store
 	Telemetry     Telemetry
@@ -32,7 +30,10 @@ type API struct {
 	InternalToken string
 	DeadLetters   DeadLetterAdmin
 	queries       chan struct{}
-	limiter       *limiter
+	limiter       *localLimiter
+	Quota         Quota
+	Replay        ReplayStore
+	Proxies       TrustedProxies
 }
 type contextKey struct{}
 
@@ -41,47 +42,7 @@ func principal(r *http.Request) Principal {
 	return p
 }
 func NewAPI(s *Store, t Telemetry, in Ingestor) *API {
-	return &API{Store: s, Telemetry: t, Ingest: in, queries: make(chan struct{}, 16), limiter: &limiter{entries: map[string]bucket{}}}
-}
-
-type bucket struct {
-	tokens float64
-	time   time.Time
-}
-type limiter struct {
-	mu      sync.Mutex
-	entries map[string]bucket
-}
-
-func (l *limiter) allow(key string, rate float64, burst float64) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	now := time.Now()
-	b, ok := l.entries[key]
-	if !ok {
-		if len(l.entries) >= 10000 {
-			for k, v := range l.entries {
-				if now.Sub(v.time) > 5*time.Minute {
-					delete(l.entries, k)
-				}
-			}
-			if len(l.entries) >= 10000 {
-				return false
-			}
-		}
-		b = bucket{burst, now}
-	}
-	b.tokens += now.Sub(b.time).Seconds() * rate
-	if b.tokens > burst {
-		b.tokens = burst
-	}
-	b.time = now
-	allowed := b.tokens >= 1
-	if allowed {
-		b.tokens--
-	}
-	l.entries[key] = b
-	return allowed
+	return &API{Store: s, Telemetry: t, Ingest: in, queries: make(chan struct{}, 16), limiter: &localLimiter{entries: map[string]localBucket{}}, Quota: NewSQLQuota(s), Replay: NewSQLReplayStore(s)}
 }
 func respond(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -123,15 +84,11 @@ func (a *API) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 		w.Header().Set("Vary", "Origin")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Sennet-Workspace, X-Sennet-Signature-Version, X-Sennet-Signature, X-Sennet-Timestamp, X-Sennet-Nonce")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 	}
 	if r.Method == "OPTIONS" {
 		w.WriteHeader(204)
-		return
-	}
-	if r.Header.Get("X-Sennet-Signature") != "" || r.Header.Get("X-Sennet-Timestamp") != "" {
-		problem(w, 400, "legacy API-key signing is not supported")
 		return
 	}
 	if r.URL.Path == "/live" {
@@ -172,10 +129,7 @@ func (a *API) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		ip = r.RemoteAddr
-	}
+	ip := a.Proxies.ClientIP(r)
 	if !a.limiter.allow("ip:"+ip, 100, 200) {
 		w.Header().Set("Retry-After", "1")
 		problem(w, 429, "source request budget exhausted")
@@ -186,18 +140,33 @@ func (a *API) serve(w http.ResponseWriter, r *http.Request) {
 		problem(w, 401, "bearer credential required")
 		return
 	}
-	if a.Resolve == nil {
-		problem(w, 503, "login verification unavailable")
-		return
+	token := parts[1]
+	p, err := a.Store.Authenticate(r.Context(), token)
+	if err != nil && a.Resolve != nil && !strings.HasPrefix(token, "sk_") && !strings.HasPrefix(token, "ses_") && !strings.HasPrefix(token, "col_") && !strings.HasPrefix(token, "enr_") {
+		p, err = a.Resolve(r.Context(), token, r.Header.Get("X-Sennet-Workspace"))
 	}
-	p, err := a.Resolve(r.Context(), parts[1])
-	if err != nil || p.Tenant == "" || !validRole(p.Role) {
+	if err != nil || p.OrganizationID == "" || p.WorkspaceID == "" {
 		problem(w, 401, "invalid or expired credential")
 		return
 	}
-	if !a.limiter.allow("tenant:"+p.Tenant, 100, 200) {
+	op, known := routeOperation(r.Method, r.URL.Path)
+	if !known {
+		problem(w, 404, "endpoint not available")
+		return
+	}
+	if !Allowed(p, op) {
+		problem(w, 403, "operation not permitted")
+		return
+	}
+	quotaKey := ScopedKey(p, "quota", "requests")
+	allowed, quotaErr := a.Quota.Allow(r.Context(), quotaKey, 6000, time.Minute, 1)
+	if quotaErr != nil {
+		problem(w, 503, "quota service unavailable")
+		return
+	}
+	if !allowed {
 		w.Header().Set("Retry-After", "1")
-		problem(w, 429, "tenant request budget exhausted")
+		problem(w, 429, "workspace request budget exhausted")
 		return
 	}
 	requestCtx, requestCancel := context.WithTimeout(r.Context(), 20*time.Second)
@@ -222,6 +191,10 @@ func (a *API) serve(w http.ResponseWriter, r *http.Request) {
 			problem(w, 413, "body exceeds 4 MiB")
 			return
 		}
+		if e := verifySignature(r.Context(), a.Replay, p, r, token, b); e != nil {
+			problem(w, 401, e.Error())
+			return
+		}
 		r.Body = io.NopCloser(bytes.NewReader(b))
 	}
 	path := r.URL.Path
@@ -232,20 +205,12 @@ func (a *API) serve(w http.ResponseWriter, r *http.Request) {
 			problem(w, 404, "endpoint not served by this process role")
 			return
 		}
-		if p.Role == "reader" {
-			problem(w, 403, "ingestion scope required")
-			return
-		}
 		a.heartbeat(w, r)
 		return
 	}
 	if path == "/api/events" && r.Method == "POST" || strings.HasPrefix(path, "/v1/") {
 		if !allowsIngest {
 			problem(w, 404, "endpoint not served by this process role")
-			return
-		}
-		if p.Role == "reader" {
-			problem(w, 403, "ingestion scope required")
 			return
 		}
 		if strings.HasPrefix(path, "/v1/") {
@@ -255,18 +220,22 @@ func (a *API) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if p.Role == "ingest" {
-		problem(w, 403, "query scope required")
-		return
-	}
 	if !allowsQuery {
 		problem(w, 404, "endpoint not served by this process role")
 		return
 	}
 	switch path {
 	case "/api/session":
+		if r.Method != "GET" {
+			problem(w, 405, "GET required")
+			return
+		}
 		respond(w, 200, p)
 	case "/api/capabilities":
+		if r.Method != "GET" {
+			problem(w, 405, "GET required")
+			return
+		}
 		respond(w, 200, map[string]any{"mode": a.Mode, "signals": signals, "retention_days": 30, "max_query_rows": 1000, "cloud_integrations": false, "team_management": false, "billing": false})
 	case "/api/agents":
 		if r.Method != "GET" {
@@ -291,8 +260,12 @@ func (a *API) serve(w http.ResponseWriter, r *http.Request) {
 		a.monitors(w, r)
 	case "/api/dead-letter":
 		a.deadLetter(w, r)
+	case "/api/keys", "/api/keys/create":
+		a.keys(w, r)
 	case "/api/dashboards", "/api/preferences":
 		a.resources(w, r, strings.TrimPrefix(path, "/api/"))
+	case "/api/human-sessions", "/api/organizations", "/api/workspaces", "/api/memberships", "/api/role-assignments", "/api/collector-enrollments", "/api/collectors/enroll", "/api/collector-credentials/rotate", "/api/collector-credentials", "/api/workload-identities", "/api/audit-events":
+		a.control(w, r)
 	default:
 		problem(w, 404, "endpoint not available")
 	}
@@ -345,10 +318,6 @@ func (a *API) ingest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) deadLetter(w http.ResponseWriter, r *http.Request) {
-	if principal(r).Role != "admin" {
-		problem(w, 403, "admin required")
-		return
-	}
 	if a.DeadLetters == nil {
 		problem(w, 404, "dead-letter administration is not configured")
 		return
@@ -416,6 +385,42 @@ func (a *API) query(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond(w, 200, page)
+}
+func (a *API) keys(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	switch r.Method {
+	case "GET":
+		keys, err := a.Store.Keys(r.Context(), p)
+		if err != nil {
+			problem(w, 503, "key store unavailable")
+			return
+		}
+		respond(w, 200, keys)
+	case "POST":
+		var req struct {
+			Name    string `json:"name"`
+			Role    string `json:"role"`
+			Expires int64  `json:"expires"`
+		}
+		if err := decode(r, &req); err != nil {
+			problem(w, 400, "invalid key request")
+			return
+		}
+		k, secret, err := a.Store.CreateKey(r.Context(), p, req.Name, req.Role, req.Expires)
+		if err != nil {
+			problem(w, 400, "valid name, role and future expiry required")
+			return
+		}
+		respond(w, 201, map[string]any{"metadata": k, "key": secret})
+	case "DELETE":
+		if err := a.Store.Revoke(r.Context(), p, r.URL.Query().Get("id")); err != nil {
+			problem(w, 404, "key not found")
+			return
+		}
+		w.WriteHeader(204)
+	default:
+		problem(w, 405, "method not allowed")
+	}
 }
 func (a *API) heartbeat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
@@ -491,10 +496,6 @@ func (a *API) resources(w http.ResponseWriter, r *http.Request, kind string) {
 		}
 		respond(w, 200, out)
 	case "POST":
-		if p.Role != "admin" {
-			problem(w, 403, "admin required")
-			return
-		}
 		var v map[string]any
 		if err := decode(r, &v); err != nil {
 			problem(w, 400, "invalid resource")
@@ -521,10 +522,6 @@ func (a *API) resources(w http.ResponseWriter, r *http.Request, kind string) {
 		}
 		respond(w, 201, v)
 	case "DELETE":
-		if p.Role != "admin" {
-			problem(w, 403, "admin required")
-			return
-		}
 		if err := a.Store.DeleteResource(r.Context(), p, kind, r.URL.Query().Get("id")); err != nil {
 			problem(w, 404, "resource not found")
 			return
