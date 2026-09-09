@@ -96,11 +96,11 @@ There are no wildcards and no global/default owner. Existing v2 workspaces count
 
 `security_control_test.go` creates two organizations and covers cross-organization telemetry events, agents, dashboards, preferences, alerts, integration keys, organizations, workspaces, memberships, role assignments, workload identities, collector credentials, and audit events. It also tests payload tenant override, cross-tenant revoke/write attempts, cache-key separation, privilege escalation, expiration, one-time enrollment, unsigned collector rejection, method/path binding, replay, rotation revocation, legacy HMAC compatibility, trusted-proxy spoofing, shared SQL quota accounting, audit redaction/immutability/pagination, explicit legacy ownership mapping, and orphan quarantine.
 
-Verification on 2026-09-09:
+Verification on 2026-09-10:
 
 - `go test ./...`: passed for every backend package.
 - `go vet ./...`: passed with no findings.
-- `go test -race ./...`: environment-blocked, not passed. The Windows Go toolchain requires CGO; with `CGO_ENABLED=1` it reports `C compiler "gcc" not found`. The installed WSL distribution has neither Go nor GCC, and Docker returned HTTP 500 while pulling the official Go image with API v1.55 and v1.47. Run this gate in Linux CI or on a host with a GCC-compatible toolchain before merge.
+- `CGO_ENABLED=1 go test -race ./...`: passed in Ubuntu 24.04 under WSL with GCC and Go 1.27.1. Every backend package passed; packages without tests were reported explicitly.
 
 ## Threat boundaries and remaining review
 
