@@ -7,7 +7,6 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
@@ -19,14 +18,6 @@ type Principal struct {
 	Tenant  string `json:"tenant"`
 	Subject string `json:"subject"`
 	Role    string `json:"role"`
-}
-type Key struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Role    string `json:"role"`
-	Prefix  string `json:"prefix"`
-	Created int64  `json:"created"`
-	Expires int64  `json:"expires"`
 }
 type Store struct {
 	db       *sql.DB
@@ -61,13 +52,10 @@ func Open(dsn string) (*Store, error) {
 	}
 	schema := []string{
 		`CREATE TABLE IF NOT EXISTS platform_schema (version INTEGER PRIMARY KEY)`,
-		`CREATE TABLE IF NOT EXISTS platform_keys (id TEXT PRIMARY KEY, hash TEXT UNIQUE NOT NULL, tenant TEXT NOT NULL, name TEXT NOT NULL, role TEXT NOT NULL, prefix TEXT NOT NULL, created BIGINT NOT NULL, expires BIGINT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0)`,
-		`CREATE INDEX IF NOT EXISTS platform_keys_tenant ON platform_keys(tenant,created)`,
 		`CREATE TABLE IF NOT EXISTS platform_agents (tenant TEXT NOT NULL, id TEXT NOT NULL, version TEXT NOT NULL, seen BIGINT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(tenant,id))`,
 		`CREATE TABLE IF NOT EXISTS platform_events (tenant TEXT NOT NULL, id TEXT NOT NULL, time_ms BIGINT NOT NULL, signal TEXT NOT NULL, service TEXT NOT NULL, trace_id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(tenant,id))`,
 		`CREATE INDEX IF NOT EXISTS platform_events_query ON platform_events(tenant,time_ms,id)`,
 		`CREATE TABLE IF NOT EXISTS platform_resources (tenant TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL, payload TEXT NOT NULL, updated BIGINT NOT NULL, PRIMARY KEY(tenant,kind,id))`,
-		`CREATE TABLE IF NOT EXISTS platform_audit (id TEXT PRIMARY KEY, tenant TEXT NOT NULL, subject TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, time_ms BIGINT NOT NULL)`,
 		`INSERT INTO platform_schema(version) VALUES(1) ON CONFLICT(version) DO NOTHING`,
 	}
 	tx, err := d.BeginTx(ctx, nil)
@@ -117,80 +105,6 @@ func randomID() string {
 }
 func digest(v string) string  { h := sha256.Sum256([]byte(v)); return hex.EncodeToString(h[:]) }
 func validRole(v string) bool { return v == "admin" || v == "reader" || v == "ingest" }
-func (s *Store) Seed(ctx context.Context, token, tenant string) error {
-	if len(token) < 24 || !strings.HasPrefix(token, "sk_") || tenant == "" {
-		return errors.New("bootstrap key must start sk_, contain at least 24 characters, and have a tenant")
-	}
-	_, err := s.db.ExecContext(ctx, s.q(`INSERT INTO platform_keys(id,hash,tenant,name,role,prefix,created,expires) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(hash) DO NOTHING`), randomID(), digest(token), tenant, "Bootstrap", "admin", token[:8], time.Now().UnixMilli(), int64(0))
-	return err
-}
-func (s *Store) Authenticate(ctx context.Context, token string) (Principal, error) {
-	var p Principal
-	var id string
-	err := s.db.QueryRowContext(ctx, s.q(`SELECT tenant,id,role FROM platform_keys WHERE hash=? AND revoked=0 AND (expires=0 OR expires>?)`), digest(token), time.Now().UnixMilli()).Scan(&p.Tenant, &id, &p.Role)
-	p.Subject = "key:" + id
-	return p, err
-}
-func (s *Store) Keys(ctx context.Context, p Principal) ([]Key, error) {
-	rows, err := s.db.QueryContext(ctx, s.q(`SELECT id,name,role,prefix,created,expires FROM platform_keys WHERE tenant=? AND revoked=0 ORDER BY created DESC LIMIT 1000`), p.Tenant)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []Key{}
-	for rows.Next() {
-		var k Key
-		if err = rows.Scan(&k.ID, &k.Name, &k.Role, &k.Prefix, &k.Created, &k.Expires); err != nil {
-			return nil, err
-		}
-		out = append(out, k)
-	}
-	return out, rows.Err()
-}
-func (s *Store) CreateKey(ctx context.Context, p Principal, name, role string, expires int64) (Key, string, error) {
-	if p.Role != "admin" || len(strings.TrimSpace(name)) == 0 || len(name) > 100 || !validRole(role) || expires <= time.Now().UnixMilli() {
-		return Key{}, "", errors.New("admin role, name, valid scope and future expiry required")
-	}
-	token := "sk_" + randomID() + randomID()
-	k := Key{randomID(), name, role, token[:8], time.Now().UnixMilli(), expires}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return k, "", err
-	}
-	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, s.q(`INSERT INTO platform_keys(id,hash,tenant,name,role,prefix,created,expires) VALUES(?,?,?,?,?,?,?,?)`), k.ID, digest(token), p.Tenant, k.Name, k.Role, k.Prefix, k.Created, k.Expires)
-	if err != nil {
-		return k, "", err
-	}
-	_, err = tx.ExecContext(ctx, s.q(`INSERT INTO platform_audit(id,tenant,subject,action,target,time_ms) VALUES(?,?,?,?,?,?)`), randomID(), p.Tenant, p.Subject, "key.create", k.ID, k.Created)
-	if err != nil {
-		return k, "", err
-	}
-	return k, token, tx.Commit()
-}
-func (s *Store) Revoke(ctx context.Context, p Principal, id string) error {
-	if p.Role != "admin" {
-		return errors.New("admin required")
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	r, err := tx.ExecContext(ctx, s.q(`UPDATE platform_keys SET revoked=1 WHERE tenant=? AND id=? AND revoked=0`), p.Tenant, id)
-	if err != nil {
-		return err
-	}
-	n, _ := r.RowsAffected()
-	if n == 0 {
-		return sql.ErrNoRows
-	}
-	_, err = tx.ExecContext(ctx, s.q(`INSERT INTO platform_audit(id,tenant,subject,action,target,time_ms) VALUES(?,?,?,?,?,?)`), randomID(), p.Tenant, p.Subject, "key.revoke", id, time.Now().UnixMilli())
-	if err != nil {
-		return err
-	}
-	return tx.Commit()
-}
 
 type Agent struct {
 	ID         string            `json:"id"`

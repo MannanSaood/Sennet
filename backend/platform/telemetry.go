@@ -63,35 +63,46 @@ func validateEvents(tenant string, events []Event) error {
 	if len(events) == 0 || len(events) > 1000 {
 		return errors.New("batch requires 1–1000 events")
 	}
-	now := time.Now().UnixMilli()
 	for i := range events {
 		e := &events[i]
 		e.Tenant = tenant
-		if e.ID == "" {
-			return errors.New("stable event id required for replay")
+		if err := validateEvent(e, true); err != nil {
+			return err
 		}
-		if len(e.ID) > 160 || !signals[e.Signal] || len(e.Service) == 0 || len(e.Service) > 200 || len(e.Name) > 500 || e.Duration < 0 || math.IsNaN(e.Duration) || math.IsInf(e.Duration, 0) || math.IsNaN(e.Value) || math.IsInf(e.Value, 0) || e.Time < now-int64(30*24*time.Hour/time.Millisecond) || e.Time > now+300000 {
-			return errors.New("invalid event fields or timestamp outside 30-day retention")
+	}
+	return nil
+}
+
+func validateEvent(e *Event, enforceIngressTime bool) error {
+	if e.ID == "" {
+		return errors.New("stable event id required for replay")
+	}
+	invalidTime := e.Time <= 0
+	if enforceIngressTime {
+		now := time.Now().UnixMilli()
+		invalidTime = e.Time < now-int64(30*24*time.Hour/time.Millisecond) || e.Time > now+300000
+	}
+	if len(e.ID) > 160 || !signals[e.Signal] || len(e.Service) == 0 || len(e.Service) > 200 || len(e.Name) > 500 || e.Duration < 0 || math.IsNaN(e.Duration) || math.IsInf(e.Duration, 0) || math.IsNaN(e.Value) || math.IsInf(e.Value, 0) || invalidTime {
+		return errors.New("invalid event fields or timestamp outside 30-day retention")
+	}
+	if len(e.TraceID) > 128 || len(e.SpanID) > 128 || len(e.ParentID) > 128 || len(e.Attributes) > 64 {
+		return errors.New("event cardinality limits exceeded")
+	}
+	clean := map[string]string{}
+	for k, v := range e.Attributes {
+		if len(k) > 128 || len(v) > 4096 {
+			return errors.New("attribute exceeds size limit")
 		}
-		if len(e.TraceID) > 128 || len(e.SpanID) > 128 || len(e.ParentID) > 128 || len(e.Attributes) > 64 {
-			return errors.New("event cardinality limits exceeded")
+		lower := strings.ToLower(k)
+		if strings.Contains(lower, "password") || strings.Contains(lower, "secret") || strings.Contains(lower, "authorization") || strings.Contains(lower, "prompt") || strings.Contains(lower, "completion") {
+			continue
 		}
-		clean := map[string]string{}
-		for k, v := range e.Attributes {
-			if len(k) > 128 || len(v) > 4096 {
-				return errors.New("attribute exceeds size limit")
-			}
-			lower := strings.ToLower(k)
-			if strings.Contains(lower, "password") || strings.Contains(lower, "secret") || strings.Contains(lower, "authorization") || strings.Contains(lower, "prompt") || strings.Contains(lower, "completion") {
-				continue
-			}
-			clean[k] = v
-		}
-		e.Attributes = clean
-		if e.Signal == "finance" {
-			if e.Attributes["transaction_id"] == "" || e.Attributes["state"] == "" || len(e.Attributes["currency"]) != 3 || !money.MatchString(e.Attributes["amount"]) {
-				return errors.New("finance requires transaction_id, state, ISO currency and exact decimal amount")
-			}
+		clean[k] = v
+	}
+	e.Attributes = clean
+	if e.Signal == "finance" {
+		if e.Attributes["transaction_id"] == "" || e.Attributes["state"] == "" || len(e.Attributes["currency"]) != 3 || !money.MatchString(e.Attributes["amount"]) {
+			return errors.New("finance requires transaction_id, state, ISO currency and exact decimal amount")
 		}
 	}
 	return nil
@@ -223,6 +234,7 @@ type ClickHouse struct {
 	User     string
 	Password string
 	Client   *http.Client
+	InitMode string
 }
 
 func (c *ClickHouse) request(ctx context.Context, query string, params url.Values, body []byte) ([]byte, error) {
@@ -260,6 +272,12 @@ func (c *ClickHouse) request(ctx context.Context, query string, params url.Value
 	return b, nil
 }
 func (c *ClickHouse) Init(ctx context.Context) error {
+	if c.InitMode == "none" {
+		return nil
+	}
+	if c.InitMode != "" && c.InitMode != "local" {
+		return errors.New("ClickHouse init mode must be local or none")
+	}
 	_, err := c.request(ctx, `CREATE TABLE IF NOT EXISTS sennet_events (tenant String,id String,time_ms Int64,signal LowCardinality(String),service LowCardinality(String),trace_id String,payload String) ENGINE=ReplacingMergeTree ORDER BY (tenant,time_ms,id) TTL toDateTime(time_ms/1000) + INTERVAL 30 DAY`, nil, nil)
 	return err
 }

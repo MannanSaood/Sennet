@@ -5,28 +5,29 @@
 | Variable | Purpose |
 |---|---|
 | SENNET_DATABASE_URL | PostgreSQL URL or local SQLite file; default `./sennet-platform.db` |
-| INIT_API_KEY | Random bootstrap credential, `sk_` prefix, at least 24 characters |
-| SENNET_BOOTSTRAP_TENANT | Explicit bootstrap tenant, default `local` |
+| SENNET_AUTH_MODE | `firebase` in production; `development` only for local evaluation |
+| FIREBASE_SERVICE_ACCOUNT_JSON / PATH | Firebase Admin identity used to verify login tokens |
+| SENNET_DEVELOPMENT_SESSION_TOKEN / TENANT | Local evaluation identity; forbidden in production |
 | SENNET_BIND / PORT | Bind address (default loopback) and port (8080) |
 | SENNET_ALLOWED_ORIGINS | Exact comma-separated browser origins; no wildcard |
 | SENNET_CLICKHOUSE_URL / USER / PASSWORD | Analytical backend endpoint and credentials |
 | SENNET_KAFKA_BROKERS / TOPIC | Broker addresses and topic (`sennet-events`) |
 | SENNET_KAFKA_TLS / USER / PASSWORD | Broker transport TLS and optional SASL |
 | SENNET_ENV | `production` requires PostgreSQL, Kafka and ClickHouse |
-| FIREBASE_SERVICE_ACCOUNT_PATH | Optional Firebase server identity; each verified UID owns a private tenant |
+| FIREBASE_SERVICE_ACCOUNT_PATH | Firebase server identity; each verified UID owns a personal tenant unless a `tenant_id` claim is supplied |
 
-Credential values belong in a secret manager or deployment environment. Browser variables must never contain ingestion/admin secrets. Frontend Firebase configuration is optional; self-hosted access-key sign-in works without it.
+Credential values belong in a secret manager or deployment environment. Browser Firebase configuration identifies the Firebase project but must never contain the Admin service account or operator token. Users sign in; there is no self-hosted API-key mode.
 
 TLS termination is required when serving outside loopback. Trust only configured ingress hosts. The rate limiter deliberately ignores forwarded headers, so a shared proxy uses a shared pre-auth source budget. Place scalable authenticated quotas at the gateway before raising local defaults. Configure Kafka topics explicitly for production (replication factor >=3, minimum in-sync replicas >=2, sufficient partitions and retention). Required-acks alone does not create replication. The example ClickHouse table is a local ReplacingMergeTree; use appropriately configured replicated/distributed tables in production after validating query and replay semantics.
 
 ## Migration
 
-The new server uses `platform_*` tables and a separate default SQLite file. It does not expose legacy global key, cost or dashboard endpoints. Existing legacy keys are not silently promoted. If a legacy INIT_API_KEY is reused, it is deliberately seeded as one bootstrap tenant; rotate it immediately and issue scoped credentials.
+The new server uses `platform_*` tables and a separate default SQLite file. It does not expose legacy key or cloud-cost endpoints. Existing API keys are not accepted or migrated; configure Firebase identity and require users to sign in.
 
 1. Back up the legacy database and config; preserve existing files.
 2. Inventory owners and resolve unowned records explicitly.
 3. Deploy the new stack alongside the old service, initially for an evaluation tenant.
-4. Issue new ingestion credentials; validate OTLP and application events with a fixture.
+4. Sign in and validate OTLP and application events with a short-lived login ID token.
 5. Compare query results, ownership and event counts before switching each tenant.
 6. Retain rollback routing/config and old read-only backups until acceptance.
 

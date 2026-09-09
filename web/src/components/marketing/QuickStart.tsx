@@ -12,7 +12,7 @@ export function QuickStart() {
         {
             step: 2,
             title: "Configure",
-            description: "Link the agent to your account. You'll need your API key from the dashboard.",
+            description: "Sign in to link the agent to your account. There are no API keys to create or manage.",
             code: "sudo sennet init"
         },
         {

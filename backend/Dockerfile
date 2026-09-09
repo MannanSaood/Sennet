@@ -26,6 +26,7 @@ RUN go mod download
 
 # Build the binary
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /sennet-server .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /sennet-replay ./cmd/sennet-replay
 
 # Production stage
 FROM alpine:3.19
@@ -40,6 +41,7 @@ WORKDIR /app
 
 # Copy binary from builder
 COPY --from=builder /sennet-server .
+COPY --from=builder /sennet-replay .
 
 # Create data directory for SQLite
 RUN mkdir -p /data && chown sennet:sennet /data

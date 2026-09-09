@@ -1,6 +1,6 @@
 # API and event contracts
 
-All application endpoints require a bearer credential. Roles are `ingest`, `reader` or `admin`. A tenant is derived from the verified credential and overrides any supplied tenant field.
+All application endpoints require a short-lived bearer login token. Sennet does not issue user-managed API keys. Roles are `ingest`, `reader` or `admin`. A tenant is derived from verified login claims and overrides any supplied tenant field.
 
 | Endpoint | Function |
 |---|---|
@@ -9,7 +9,6 @@ All application endpoints require a bearer credential. Roles are `ingest`, `read
 | GET /api/events | Bounded event search and cursor pagination |
 | POST /api/events | Durable event batch ingestion |
 | POST /v1/traces, /v1/logs, /v1/metrics | OTLP/HTTP JSON or protobuf |
-| GET/POST/DELETE /api/keys | Admin key metadata, creation and revocation |
 | GET/POST/DELETE /api/dashboards | Saved investigation views |
 | GET/POST/DELETE /api/alerts | Internal error-count monitors |
 | GET /api/finance/reconciliation | Bounded transaction sequence inspection |

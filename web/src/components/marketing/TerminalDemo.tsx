@@ -23,8 +23,8 @@ const DEMO_STEPS: CommandStep[] = [
     {
         command: "sudo sennet init",
         output: [
-            "? Enter your API Key: [hidden]",
-            " Authenticating... Success!",
+            "Opening browser sign-in...",
+            " Login confirmed. Session linked successfully!",
             " Interface [eth0] auto-detected.",
             " Loading eBPF programs... OK",
             " Attaching to TC ingress/egress... OK",

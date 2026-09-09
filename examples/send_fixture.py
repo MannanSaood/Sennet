@@ -1,7 +1,7 @@
 """Explicit evaluation fixtures through real ingestion. Standard library only."""
 import json, os, time, uuid, urllib.request
 url = os.environ.get('SENNET_URL', 'http://127.0.0.1:8080')
-key = os.environ['SENNET_API_KEY']
+key = os.environ['SENNET_SESSION_TOKEN']
 now = int(time.time()*1000)
 events=[]
 for i in range(60):

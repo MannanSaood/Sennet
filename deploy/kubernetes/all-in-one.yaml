@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: all-in-one
+spec:
+  replicas: 0
+  selector: {matchLabels: {app: sennet, role: all-in-one}}
+  strategy: {type: Recreate}
+  template:
+    metadata: {labels: {app: sennet, role: all-in-one}}
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: all-in-one
+          image: sennet/backend
+          imagePullPolicy: IfNotPresent
+          ports: [{name: http, containerPort: 8080}]
+          env:
+            - {name: SENNET_ROLE, value: all}
+            - {name: SENNET_BIND, value: 0.0.0.0}
+            - {name: SENNET_DATABASE_URL, value: /data/sennet-platform.db}
+            - {name: SENNET_AUTH_MODE, value: development}
+            - {name: SENNET_DEVELOPMENT_TENANT, value: local}
+            - {name: SENNET_DEVELOPMENT_SESSION_TOKEN, valueFrom: {secretKeyRef: {name: sennet-local-evaluation, key: session-token}}}
+            - {name: SENNET_OPERATOR_TOKEN, valueFrom: {secretKeyRef: {name: sennet-local-evaluation, key: operator-token}}}
+          volumeMounts: [{name: data, mountPath: /data}]
+          readinessProbe: {httpGet: {path: /ready, port: http}, periodSeconds: 5}
+          livenessProbe: {httpGet: {path: /live, port: http}, periodSeconds: 10}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+      volumes: [{name: data, persistentVolumeClaim: {claimName: all-in-one}}]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: all-in-one}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 1Gi}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: all-in-one}
+spec:
+  selector: {app: sennet, role: all-in-one}
+  ports: [{name: http, port: 8080, targetPort: http}]

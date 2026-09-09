@@ -47,6 +47,8 @@ jobs:
       SENNET_API_KEY: sk_ci_evaluation_only_12345678901234567890
       SENNET_POSTGRES_PASSWORD: ci_database_only
       SENNET_CLICKHOUSE_PASSWORD: ci_analytics_only
+      SENNET_OPERATOR_TOKEN: ci_operator_metrics_only_1234567890
+      SENNET_QUERY_URL: http://127.0.0.1:8082
     steps:
       - uses: actions/checkout@v4
       - run: docker compose -f deploy/compose.yaml up --build --wait --wait-timeout 240
