@@ -19,8 +19,13 @@ async function mock(page: Page, options: {partial?:boolean;fail?:boolean} = {}) 
     }
     if (url.pathname === '/api/summary') return route.fulfill({json:{events:3,errors:2,services:2,p95_ms:120,buckets:[{time:now-60000,events:1,errors:0},{time:now,events:2,errors:2}],by_service:[]}});
     if (url.pathname === '/api/agents') return route.fulfill({json:[{id:'collector-1',version:'1.2.0',seen:now,collection:'running',metrics:{queue_depth:'7'}}]});
-    if (url.pathname === '/api/query') return route.fulfill({json:{version:'v1',points:[{time:now,value:42,count:2,group:{service:'checkout'},exemplars:['trace-123456789']}],comparison:[{time:now-3600000,value:38,count:2}],execution:{rows_scanned:3,bytes_scanned:512,elapsed_ms:2,partial:!!options.partial,partial_reasons:options.partial?['row_budget']:[],step_ms:1000}}});
+    if (url.pathname === '/api/trace') return route.fulfill({json:{trace_id:'trace-123456789',spans:spans.filter(item=>item.span_id).map((item,index)=>({...item,links:index?['async-1']:[],missing_parent:index===1,late:index===1,critical:true,fan_out:index?0:2,fan_in:index?2:0})),logs:[spans[2]],metrics:[],partial:false,clock_skew_detected:false}});
+    if (url.pathname === '/api/topology') return route.fulfill({json:{edges:[{source:'checkout',destination:'payments',calls:120,errors:2,duration_ms:4800}],clusters:{commerce:2},scanned:3000,partial:false,next_cursor:''}});
+    if (url.pathname === '/api/query') return route.fulfill({json:{version:'v1',points:[{time:now,value:42,count:2,group:{service:'checkout'},exemplars:['trace-123456789'],histogram:[{upper:50,count:2}]}],comparison:[{time:now-3600000,value:38,count:2}],execution:{rows_scanned:3,bytes_scanned:512,elapsed_ms:2,partial:!!options.partial,partial_reasons:options.partial?['row_budget']:[],step_ms:1000}}});
     if (url.pathname === '/api/dashboards') return route.request().method()==='POST' ? route.fulfill({json:{id:'saved'}}) : route.fulfill({json:[{id:'one',name:'Checkout health v1',path:'/dashboard/logs',range:'3600000',signal:'log',search:'',service:'checkout'}]});
+    if (url.pathname === '/api/dashboard-versions') return route.fulfill({json:[{id:'saved',version_id:'v1',created_at:now,name:'Investigation dashboard',range:'3600000',path:'/dashboard',signal:'',search:'',service:'checkout',panels:[]}]});
+    if (url.pathname === '/api/pipeline-health') return route.fulfill({json:{configured:true,scope:'deployment',timestamp:now,stages:[{name:'gateway append',state:'healthy',errors:0}]}});
+    if (url.pathname === '/api/notification-status') return route.fulfill({json:{provider_configured:false,pending:1,delivered:0,delivery_boundary:'outbox acknowledgement'}});
     if (url.pathname === '/api/alerts') return route.fulfill({json:[]});
     return route.fulfill({status:404,json:{error:'No test fixture'}});
   });
@@ -39,8 +44,16 @@ test('filter, pagination, trace drilldown, and keyboard dialog navigation', asyn
 
 test('saved dashboard and partial analytical state', async ({page}) => {
   await mock(page,{partial:true}); await page.goto('/dashboard');
-  await expect(page.getByText('Checkout health v1')).toBeVisible(); await page.getByRole('button',{name:'Save',exact:true}).last().click(); await expect(page.getByText(/Dashboard saved/)).toBeVisible();
+  await expect(page.getByText('Checkout health v1')).toBeVisible(); await page.getByRole('button',{name:'Save',exact:true}).last().click(); await expect(page.getByText(/immutable version saved/)).toBeVisible();
+  await expect(page.getByRole('button',{name:/^Version /})).toBeVisible();
   await page.goto('/dashboard/metrics'); await expect(page.getByText(/Budget limit: row_budget/)).toBeVisible();
+});
+
+test('server topology, histogram, formula, and operational contracts', async ({page}) => {
+  await mock(page); await page.goto('/dashboard/map'); await expect(page.getByRole('button',{name:/checkout 120 calls/})).toBeVisible();
+  await page.goto('/dashboard/metrics'); await page.getByLabel('Operation').selectOption('histogram'); await page.getByLabel('Formula').fill('A*2'); await page.getByRole('button',{name:'Apply formula'}).click(); await expect(page.getByText(/A\*2 · histogram/)).toBeVisible();
+  await page.goto('/dashboard'); await expect(page.getByText('gateway append')).toBeVisible();
+  await page.goto('/dashboard/alerts'); await expect(page.getByText('Pending transitions')).toBeVisible(); await expect(page.getByText('Not configured')).toBeVisible();
 });
 
 test('failed state is explicit', async ({page}) => {

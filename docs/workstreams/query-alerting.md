@@ -12,6 +12,10 @@ Logs and finance events support counts only. In particular, finance decimal amou
 
 Responses include `rows_scanned`, estimated decoded `bytes_scanned`, elapsed time, effective step, `partial`, and stable partial reasons (`row_budget`, `byte_budget`). Cancellation propagates through HTTP context and database/ClickHouse requests. The ClickHouse adapter applies its existing 10,001-row and 16 MiB server caps in addition to request budgets; a cursor becomes explicit row-budget partial metadata.
 
+An optional bounded `formula` applies one numeric transform (`A`, `A+n`, `A-n`, `A*n`, or `A/n`) to the operation result; arbitrary code, multiple source queries, functions, and division by zero are rejected. Histogram points include ten bounded equal-width buckets with explicit upper bounds and counts in addition to exact p50/p95/p99 values. Formula transforms also apply to bucket bounds.
+
+Investigation-specific reads are authenticated and tenant scoped. `/api/topology` scans at most 100,000 trace records, aggregates service edges before cursor pagination, and returns stable partial metadata. `/api/trace` and `/api/correlations` scan at most 10,000 records for one trace ID and return canonical critical-path, span-link, missing-parent, late-span, fan-in/fan-out, clock-skew, related-log, and related-metric fields. Dashboard writes create immutable snapshots retrievable through `/api/dashboard-versions`. Admin-only `/api/pipeline-health` returns real deployment counters, while `/api/notification-status` returns tenant-filtered outbox acknowledgement counts without claiming a provider is configured.
+
 ## Monitor and SLO contract
 
 Monitor definitions are version `v1`. Threshold monitors count error events in a five-minute window. SLO monitors define an availability target and rolling compliance period, with two paired burn-rate conditions. Defaults are 5m/1h at 14.4x for fast burn and 30m/6h at 6x for slow burn. Each pair must breach together before firing, limiting sensitivity to isolated short spikes.

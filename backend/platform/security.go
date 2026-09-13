@@ -74,8 +74,15 @@ func routeOperation(method, path string) (Operation, bool) {
 		return OpSession, true
 	case path == "/api/events" && method == "POST", path == "/sentinel.v1.SentinelService/Heartbeat", strings.HasPrefix(path, "/v1/"):
 		return OpIngest, true
-	case path == "/api/events" || path == "/api/summary" || path == "/api/stats" || path == "/api/finance/reconciliation":
+	case path == "/api/events" || path == "/api/summary" || path == "/api/stats" || path == "/api/finance/reconciliation" || path == "/api/topology" || path == "/api/trace" || path == "/api/correlations" || path == "/api/query":
 		return OpQuery, true
+	case path == "/api/pipeline-health" || path == "/api/notification-status":
+		return OpOrganizationRead, true
+	case path == "/api/dashboard-versions":
+		if method == "GET" {
+			return OpResourceRead, true
+		}
+		return OpResourceWrite, true
 	case path == "/api/agents" || path == "/api/workload-identities":
 		return OpResourceRead, true
 	case path == "/api/dashboards" || path == "/api/preferences" || path == "/api/alerts":

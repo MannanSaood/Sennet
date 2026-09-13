@@ -254,6 +254,16 @@ func (a *API) serve(w http.ResponseWriter, r *http.Request) {
 		a.summary(w, r)
 	case "/api/query":
 		a.analyticalQuery(w, r)
+	case "/api/topology":
+		a.topology(w, r)
+	case "/api/trace", "/api/correlations":
+		a.traceInvestigation(w, r)
+	case "/api/pipeline-health":
+		a.pipelineHealth(w, r)
+	case "/api/notification-status":
+		a.notificationStatus(w, r)
+	case "/api/dashboard-versions":
+		a.dashboardVersions(w, r)
 	case "/api/events":
 		a.query(w, r)
 	case "/api/stats":
@@ -522,6 +532,16 @@ func (a *API) resources(w http.ResponseWriter, r *http.Request, kind string) {
 		if err = a.Store.PutResource(r.Context(), p, kind, id, b); err != nil {
 			problem(w, 503, "settings write unavailable")
 			return
+		}
+		if kind == "dashboards" {
+			v["dashboard_id"] = id
+			v["version_id"] = randomID()
+			v["created_at"] = time.Now().UnixMilli()
+			snapshot, _ := json.Marshal(v)
+			if err = a.Store.PutResource(r.Context(), p, "dashboard-version:"+id, v["version_id"].(string), snapshot); err != nil {
+				problem(w, 503, "dashboard version write unavailable")
+				return
+			}
 		}
 		respond(w, 201, v)
 	case "DELETE":

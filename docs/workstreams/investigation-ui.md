@@ -28,16 +28,17 @@ Playwright uses explicit route fixtures labelled `browser-fixture`; these fixtur
 
 - `npm run lint`: pass.
 - `npm run build`: pass; route-level lazy loading plus explicit React, charts, Firebase, and Markdown vendor chunks.
-- `npm run test:browser`: 8 passed across Desktop Chrome and Pixel 7 profiles (the desktop project intentionally skips the mobile-only capture case).
+- `npm run test:browser`: 10 passed across Desktop Chrome and Pixel 7 profiles, including the server topology, formula/histogram, dashboard-version, pipeline-health, and notification-status paths (the desktop project intentionally skips the mobile-only capture case).
 
 Largest final production chunks (uncompressed) are charts 368,421 B, Markdown core 333,942 B, React core 292,272 B, app index 196,819 B, syntax highlighting 169,943 B, and Firebase 109,366 B. No generated chunk exceeds Vite's 500 KB warning threshold. Charts are capped by the backend at 300 points and the UI limits visible topology edges to 100 while retaining the table alternative.
 
-## Remaining visualization and contract gaps
+## Closed visualization and contract gaps
 
-- A complete thousand-service topology needs a server aggregation/cursor contract; page-derived relationships cannot prove absence or completeness.
-- Immutable dashboard versions, linked-brush persistence, panel data models, and backend formula algebra are not exposed. The current composition saves the available resource and shares scope variables.
-- Trace critical path is approximated from observed parent/end-time evidence. Clock-skew metadata, canonical critical-path output, and first-class span-link arrays are not in the event contract.
-- Related logs and metrics are limited to records returned by the bounded trace query. Dedicated correlation endpoints would avoid mixed-signal truncation.
-- Protected Prometheus pipeline telemetry has no browser-safe workspace endpoint. Fleet diagnosis therefore uses only reported collector metrics and never invents gateway/storage state.
-- Monitor notification delivery is absent by backend design; the UI shows durable evaluation state without claiming that a provider was notified.
-- Histogram buckets are not returned by query contract v1; the explorer plots returned percentile summaries rather than fabricating bucket boundaries.
+- Topology now uses a server-side, tenant-scoped 100,000-record scan, aggregation before rendering, 500-edge cursor pages, partial reasons, clustering, zoom, filtering, and a complete table for each returned page.
+- Dashboard writes now create immutable snapshots. Panel definitions, variables, synchronized time, and linked-brush state are persisted and previous versions can be restored.
+- Analytical queries now validate and execute bounded scalar formulas server-side. Histograms return real bucket bounds/counts alongside exact percentiles.
+- Dedicated trace/correlation responses now return canonical critical-path flags, clock-skew detection, span-link arrays, missing/late markers, fan-in/fan-out counts, and separately bounded related logs and metrics.
+- Admin-only pipeline health exposes real collector-admission, gateway, storage-queue, and analytics-storage counters without exposing the operator token. Fleet inventory remains workspace scoped.
+- Notification status now exposes tenant-filtered pending and provider-acknowledged outbox counts. `provider_configured: false` remains explicit because no dispatcher is installed; the UI never equates durable enqueue with delivery.
+
+All new contracts remain intentionally bounded. Reaching a topology or trace scan cap produces explicit partial metadata; it never implies that omitted telemetry does not exist.

@@ -7,6 +7,8 @@ import (
 	"math"
 	"net/http"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -31,6 +33,7 @@ type AnalyticalRequest struct {
 	StepMS    int64       `json:"step_ms,omitempty"`
 	Compare   bool        `json:"compare_previous,omitempty"`
 	Exemplars bool        `json:"exemplars,omitempty"`
+	Formula   string      `json:"formula,omitempty"`
 	Budget    QueryBudget `json:"budget"`
 }
 
@@ -43,6 +46,12 @@ type QueryPoint struct {
 	P95       float64           `json:"p95,omitempty"`
 	P99       float64           `json:"p99,omitempty"`
 	Exemplars []string          `json:"exemplars,omitempty"`
+	Histogram []HistogramBucket `json:"histogram,omitempty"`
+}
+
+type HistogramBucket struct {
+	Upper float64 `json:"upper"`
+	Count int64   `json:"count"`
 }
 
 type QueryExecution struct {
@@ -103,7 +112,71 @@ func (q *AnalyticalRequest) validate() error {
 	if (span+q.StepMS-1)/q.StepMS > 300 {
 		return errors.New("step produces more than 300 points")
 	}
+	if _, _, err := parseFormula(q.Formula); err != nil {
+		return err
+	}
 	return nil
+}
+
+func parseFormula(raw string) (byte, float64, error) {
+	raw = strings.ReplaceAll(strings.TrimSpace(raw), " ", "")
+	if raw == "" || raw == "A" {
+		return 0, 0, nil
+	}
+	if len(raw) < 3 || raw[0] != 'A' || !strings.ContainsRune("+-*/", rune(raw[1])) {
+		return 0, 0, errors.New("formula permits A and one numeric +, -, *, or / transform")
+	}
+	n, err := strconv.ParseFloat(raw[2:], 64)
+	if err != nil || math.IsNaN(n) || math.IsInf(n, 0) || (raw[1] == '/' && n == 0) {
+		return 0, 0, errors.New("invalid formula constant")
+	}
+	return raw[1], n, nil
+}
+
+func applyFormula(v float64, formula string) float64 {
+	op, n, _ := parseFormula(formula)
+	switch op {
+	case '+':
+		return v + n
+	case '-':
+		return v - n
+	case '*':
+		return v * n
+	case '/':
+		return v / n
+	}
+	return v
+}
+
+func histogram(values []float64) []HistogramBucket {
+	if len(values) == 0 {
+		return nil
+	}
+	min, max := values[0], values[0]
+	for _, v := range values[1:] {
+		if v < min {
+			min = v
+		}
+		if v > max {
+			max = v
+		}
+	}
+	if min == max {
+		return []HistogramBucket{{Upper: max, Count: int64(len(values))}}
+	}
+	out := make([]HistogramBucket, 10)
+	width := (max - min) / 10
+	for i := range out {
+		out[i].Upper = min + width*float64(i+1)
+	}
+	for _, v := range values {
+		i := int((v - min) / width)
+		if i > 9 {
+			i = 9
+		}
+		out[i].Count++
+	}
+	return out
 }
 
 type analyticalRow struct {
@@ -273,12 +346,17 @@ func aggregateRows(data []analyticalRow, q AnalyticalRequest) []QueryPoint {
 			p.P95 = percentile(c.values, .95)
 			p.P99 = percentile(c.values, .99)
 			p.Value = p.P50
+			p.Histogram = histogram(c.values)
 		case "p50":
 			p.Value = percentile(c.values, .50)
 		case "p95":
 			p.Value = percentile(c.values, .95)
 		case "p99":
 			p.Value = percentile(c.values, .99)
+		}
+		p.Value = applyFormula(p.Value, q.Formula)
+		for i := range p.Histogram {
+			p.Histogram[i].Upper = applyFormula(p.Histogram[i].Upper, q.Formula)
 		}
 		points = append(points, p)
 	}
