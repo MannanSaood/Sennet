@@ -252,6 +252,8 @@ func (a *API) serve(w http.ResponseWriter, r *http.Request) {
 		a.finance(w, r)
 	case "/api/summary":
 		a.summary(w, r)
+	case "/api/query":
+		a.analyticalQuery(w, r)
 	case "/api/events":
 		a.query(w, r)
 	case "/api/stats":
@@ -313,6 +315,7 @@ func (a *API) ingest(w http.ResponseWriter, r *http.Request) {
 	}
 	if a.Metrics != nil {
 		a.Metrics.AcceptedEvents.Add(uint64(len(req.Events)))
+		a.Metrics.GatewayAccepted.Add(uint64(len(req.Events)))
 	}
 	respond(w, 202, map[string]any{"accepted": len(req.Events), "durable": true})
 }

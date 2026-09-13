@@ -275,8 +275,23 @@ func (c *StorageConsumer) process(ctx context.Context, messages []kafka.Message)
 		}
 	}
 	if len(events) > 0 {
+		started := time.Now()
 		if err := c.Sink.Write(ctx, events); err != nil {
 			return fmt.Errorf("analytics write: %w", err)
+		}
+		if c.Metrics != nil {
+			c.Metrics.StorageWrites.Add(1)
+			c.Metrics.StorageLatencyNanos.Add(uint64(time.Since(started)))
+			oldest := events[0].Time
+			for _, e := range events[1:] {
+				if e.Time < oldest {
+					oldest = e.Time
+				}
+			}
+			age := time.Now().UnixMilli() - oldest
+			if age > 0 {
+				c.Metrics.QueueAgeMillis.Store(uint64(age))
+			}
 		}
 	}
 	for _, d := range poison {

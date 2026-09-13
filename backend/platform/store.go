@@ -155,7 +155,12 @@ func Open(dsn string) (*Store, error) {
 		`CREATE INDEX IF NOT EXISTS platform_replay_expiry ON platform_replay_nonces(expires)`,
 		`CREATE TABLE IF NOT EXISTS platform_quota_windows (quota_key TEXT NOT NULL,window_start BIGINT NOT NULL,used BIGINT NOT NULL,expires BIGINT NOT NULL,PRIMARY KEY(quota_key,window_start))`,
 		`CREATE TABLE IF NOT EXISTS platform_quarantine (id TEXT PRIMARY KEY,source_table TEXT NOT NULL,legacy_key TEXT NOT NULL,reason TEXT NOT NULL,payload TEXT NOT NULL,quarantined BIGINT NOT NULL)`,
-		`INSERT INTO platform_schema(version) VALUES(2) ON CONFLICT(version) DO NOTHING`,
+		`CREATE TABLE IF NOT EXISTS platform_monitor_state (tenant TEXT NOT NULL,monitor_id TEXT NOT NULL,state TEXT NOT NULL,observed DOUBLE PRECISION NOT NULL,window_end BIGINT NOT NULL,evaluation_key TEXT NOT NULL,updated BIGINT NOT NULL,PRIMARY KEY(tenant,monitor_id))`,
+		`CREATE TABLE IF NOT EXISTS platform_monitor_evaluations (tenant TEXT NOT NULL,monitor_id TEXT NOT NULL,evaluation_key TEXT NOT NULL,state TEXT NOT NULL,observed DOUBLE PRECISION NOT NULL,window_end BIGINT NOT NULL,created BIGINT NOT NULL,PRIMARY KEY(tenant,monitor_id,evaluation_key))`,
+		`CREATE TABLE IF NOT EXISTS platform_notification_outbox (id TEXT PRIMARY KEY,tenant TEXT NOT NULL,monitor_id TEXT NOT NULL,evaluation_key TEXT NOT NULL,transition TEXT NOT NULL,payload TEXT NOT NULL,created BIGINT NOT NULL,delivered BIGINT NOT NULL DEFAULT 0,UNIQUE(tenant,monitor_id,evaluation_key,transition))`,
+		`CREATE INDEX IF NOT EXISTS platform_monitor_due ON platform_resources(kind,updated,tenant)`,
+		`CREATE INDEX IF NOT EXISTS platform_outbox_pending ON platform_notification_outbox(delivered,created)`,
+		`INSERT INTO platform_schema(version) VALUES(3) ON CONFLICT(version) DO NOTHING`,
 	}
 	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
