@@ -2,6 +2,8 @@
 //!
 //! Sends periodic heartbeats to the control plane and handles commands.
 
+#[cfg(target_os = "linux")]
+use anyhow::Context;
 use anyhow::Result;
 
 use std::time::{Duration, Instant};
@@ -11,6 +13,18 @@ use crate::client::{Command, HeartbeatRequest, MetricsSummary, SentinelClient};
 use crate::config::Config;
 use crate::identity::IdentityManager;
 use crate::upgrade::Updater;
+
+#[derive(Debug, Default, serde::Serialize)]
+struct ExporterHealth {
+    queue_bytes: u64,
+    oldest_record_age_seconds: u64,
+    retries: u64,
+    rejected_records: u64,
+    explicit_loss: u64,
+    last_successful_export_ms: Option<i64>,
+    collection_status: String,
+    collection_error: Option<String>,
+}
 
 // Linux-only: imports for reading eBPF metrics from pinned maps
 #[cfg(target_os = "linux")]
@@ -26,6 +40,7 @@ pub struct HeartbeatLoop {
     identity: IdentityManager,
     client: SentinelClient,
     start_time: Instant,
+    health: ExporterHealth,
 }
 
 impl HeartbeatLoop {
@@ -36,102 +51,196 @@ impl HeartbeatLoop {
             identity,
             client,
             start_time: Instant::now(),
+            health: ExporterHealth::default(),
         }
     }
 
     /// Disk and blocking transport run off the async executor, with deadlines.
-    pub async fn run(mut self) -> Result<()> {
+    pub async fn run(mut self, mut shutdown: tokio::sync::watch::Receiver<bool>) -> Result<()> {
         loop {
             let interval = Duration::from_secs(self.config.heartbeat_interval_secs);
             self = tokio::task::spawn_blocking(move || {
-                let metrics = self.collect_metrics();
-                let request = HeartbeatRequest { agent_id: self.identity.agent_id().to_string(), current_version: self.identity.version().to_string(), metrics: metrics.clone() };
-                if let Err(e) = self.spool_metrics(metrics.as_ref()) { error!("Telemetry spool failed: {}", e); }
-                if let Err(e) = self.flush_spool() { warn!("Exporter unavailable; queued observations retained: {}", e); }
+                let collected = self.collect_metrics();
+                let metrics = collected.as_ref().ok();
+                self.health.collection_status = if metrics.is_some() {
+                    "collecting"
+                } else {
+                    "unavailable"
+                }
+                .into();
+                self.health.collection_error = collected.as_ref().err().map(ToString::to_string);
+                let request = HeartbeatRequest {
+                    agent_id: self.identity.agent_id().to_string(),
+                    current_version: self.identity.version().to_string(),
+                    metrics: metrics.cloned(),
+                };
+                if let Err(e) = self.spool_metrics(metrics) {
+                    self.health.explicit_loss += 1;
+                    error!("Telemetry spool failed; observation lost explicitly: {}", e);
+                }
+                if let Err(e) = self.flush_spool() {
+                    self.health.retries += 1;
+                    warn!("Exporter unavailable; queued observations retained: {}", e);
+                }
+                if let Err(e) = self.write_health() {
+                    error!("Exporter health persistence failed: {}", e);
+                }
                 match self.client.heartbeat(&request) {
                     Ok(response) => {
                         if response.command == Command::CommandReconfigure {
                             match Config::load() {
                                 Ok(config) => match SentinelClient::new(&config) {
-                                    Ok(client) => { self.config = config; self.client = client; info!("Configuration reloaded"); }
+                                    Ok(client) => {
+                                        self.config = config;
+                                        self.client = client;
+                                        info!("Configuration reloaded");
+                                    }
                                     Err(e) => warn!("Keeping current configuration: {}", e),
                                 },
                                 Err(e) => warn!("Keeping current configuration: {}", e),
                             }
-                        } else { self.handle_command(&response.command, &response.latest_version); }
+                        } else {
+                            self.handle_command(&response.command, &response.latest_version);
+                        }
                     }
                     Err(e) => warn!("Heartbeat unavailable: {}", e),
                 }
                 self
-            }).await?;
-            tokio::time::sleep(interval + Duration::from_millis(rand::random::<u64>() % 1000)).await;
+            })
+            .await?;
+            let delay = interval + Duration::from_millis(rand::random::<u64>() % 1000);
+            tokio::select! {
+                _ = tokio::time::sleep(delay) => {}
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() { break; }
+                }
+            }
         }
+        tokio::task::spawn_blocking(move || self.flush_spool()).await??;
+        Ok(())
     }
     fn spool_metrics(&self, metrics: Option<&MetricsSummary>) -> Result<()> {
         let dir = self.config.state_dir.join("spool");
         std::fs::create_dir_all(&dir)?;
-        let size: u64 = std::fs::read_dir(&dir)?.filter_map(|e| e.ok()).filter_map(|e| e.metadata().ok()).map(|m| m.len()).sum();
-        if size >= 20 * 1024 * 1024 { anyhow::bail!("20 MiB spool full; observation rejected"); }
+        let size: u64 = std::fs::read_dir(&dir)?
+            .filter_map(|e| e.ok())
+            .filter_map(|e| e.metadata().ok())
+            .map(|m| m.len())
+            .sum();
+        if size >= 20 * 1024 * 1024 {
+            anyhow::bail!("20 MiB spool full; observation rejected");
+        }
         let now = chrono::Utc::now().timestamp_millis();
         let id = uuid::Uuid::new_v4().to_string();
         let mut attributes = serde_json::Map::new();
         if let Some(m) = metrics {
-            for (key,value) in [("rxBytes",m.rx_bytes),("txBytes",m.tx_bytes),("rxPackets",m.rx_packets),("txPackets",m.tx_packets),("dropCount",m.drop_count),("uptimeSeconds",m.uptime_seconds)] {
+            for (key, value) in [
+                ("rxBytes", m.rx_bytes),
+                ("txBytes", m.tx_bytes),
+                ("rxPackets", m.rx_packets),
+                ("txPackets", m.tx_packets),
+                ("dropCount", m.drop_count),
+                ("uptimeSeconds", m.uptime_seconds),
+            ] {
                 attributes.insert(key.into(), serde_json::Value::String(value.to_string()));
             }
         }
         let payload = serde_json::json!({"events":[{"id":id,"time":now,"signal":"metric","service":self.identity.agent_id(),"name":"network.snapshot","status":if metrics.is_some(){"collecting"}else{"unavailable"},"duration_ms":0,"value":0,"attributes":attributes}]});
-        let temp = dir.join(format!("{}-{}.tmp",now,id)); let final_path = temp.with_extension("json");
+        let temp = dir.join(format!("{}-{}.tmp", now, id));
+        let final_path = temp.with_extension("json");
         use std::io::Write;
         let mut file = std::fs::File::create(&temp)?;
-        file.write_all(&serde_json::to_vec(&payload)?)?; file.sync_all()?;
-        std::fs::rename(temp,final_path)?; Ok(())
+        file.write_all(&serde_json::to_vec(&payload)?)?;
+        file.sync_all()?;
+        std::fs::rename(temp, final_path)?;
+        Ok(())
     }
-    fn flush_spool(&self) -> Result<()> {
+    fn flush_spool(&mut self) -> Result<()> {
         let dir = self.config.state_dir.join("spool");
-        let mut files: Vec<_> = std::fs::read_dir(dir)?.filter_map(|e|e.ok()).map(|e|e.path()).filter(|p|p.extension().and_then(|s|s.to_str())==Some("json")).collect();
+        let mut files: Vec<_> = std::fs::read_dir(dir)?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("json"))
+            .collect();
         files.sort();
         let started = Instant::now();
         for path in files.into_iter().take(20) {
-            if started.elapsed() > Duration::from_secs(10) { break; }
+            if started.elapsed() > Duration::from_secs(10) {
+                break;
+            }
             let bytes = std::fs::read(&path)?;
             match self.client.export_events(&bytes) {
-                Ok(()) => std::fs::remove_file(path)?,
+                Ok(()) => {
+                    std::fs::remove_file(path)?;
+                    self.health.last_successful_export_ms =
+                        Some(chrono::Utc::now().timestamp_millis());
+                }
                 Err(e) => {
-                    if matches!(e.downcast_ref::<ureq::Error>(),Some(ureq::Error::Status(400 | 413 | 422, _))) {
-                        std::fs::rename(&path,path.with_extension("rejected"))?;
+                    if matches!(
+                        e.downcast_ref::<ureq::Error>(),
+                        Some(ureq::Error::Status(400 | 413 | 422, _))
+                    ) {
+                        std::fs::rename(&path, path.with_extension("rejected"))?;
+                        self.health.rejected_records += 1;
                         error!("Observation quarantined after permanent validation failure");
-                    } else { return Err(e); }
+                    } else {
+                        return Err(e);
+                    }
                 }
             }
         }
         Ok(())
     }
+    fn write_health(&mut self) -> Result<()> {
+        let dir = self.config.state_dir.join("spool");
+        let now = std::time::SystemTime::now();
+        let mut oldest = 0;
+        self.health.queue_bytes = 0;
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            if entry.path().extension().and_then(|v| v.to_str()) == Some("json") {
+                let metadata = entry.metadata()?;
+                self.health.queue_bytes += metadata.len();
+                oldest = oldest.max(
+                    now.duration_since(metadata.modified()?)
+                        .unwrap_or_default()
+                        .as_secs(),
+                );
+            }
+        }
+        self.health.oldest_record_age_seconds = oldest;
+        let path = self.config.state_dir.join("exporter-health.json");
+        let temporary = path.with_extension("tmp");
+        std::fs::write(&temporary, serde_json::to_vec_pretty(&self.health)?)?;
+        std::fs::rename(temporary, path)?;
+        Ok(())
+    }
     /// Collect current metrics from eBPF maps; unavailable collection is explicit.
-    fn collect_metrics(&self) -> Option<MetricsSummary> {
+    fn collect_metrics(&self) -> Result<MetricsSummary> {
         #[cfg(target_os = "linux")]
         let uptime = self.start_time.elapsed().as_secs();
-        
+
         #[cfg(target_os = "linux")]
         {
             // Try to read from pinned eBPF maps
             match Self::read_ebpf_counters() {
                 Ok(counters) => {
-                    return Some(MetricsSummary {
+                    return Ok(MetricsSummary {
                         rx_packets: counters.rx_packets,
                         rx_bytes: counters.rx_bytes,
                         tx_packets: counters.tx_packets,
                         tx_bytes: counters.tx_bytes,
                         drop_count: counters.drop_count,
-                        uptime_seconds: uptime, });
+                        uptime_seconds: uptime,
+                    });
                 }
                 Err(e) => {
-                    debug!("Could not read eBPF counters: {}", e);
+                    return Err(e.context("eBPF map read failed; collection is unavailable"));
                 }
             }
         }
-        
-        None
+
+        anyhow::bail!("collection unsupported on this operating system")
     }
 
     /// Read packet counters from pinned eBPF maps (Linux only)
@@ -141,13 +250,13 @@ impl HeartbeatLoop {
         if !pin_path.exists() {
             anyhow::bail!("Pinned map not found");
         }
-        
+
         let map_data = MapData::from_pin(pin_path)?;
         let map = Map::PerCpuArray(map_data);
         let counters: PerCpuArray<_, PacketCounters> = map.try_into()?;
-        
+
         let mut total = PacketCounters::default();
-        
+
         // Read ingress counters (index 0)
         {
             let values = counters.get(&0, 0)?;
@@ -157,7 +266,7 @@ impl HeartbeatLoop {
                 total.drop_count += cpu_val.drop_count;
             }
         }
-        
+
         // Read egress counters (index 1)
         {
             let values = counters.get(&1, 0)?;
@@ -166,7 +275,7 @@ impl HeartbeatLoop {
                 total.tx_bytes += cpu_val.tx_bytes;
             }
         }
-        
+
         Ok(total)
     }
 
@@ -181,7 +290,11 @@ impl HeartbeatLoop {
                     warn!("Upgrade available; unattended upgrades are disabled");
                     return;
                 }
-                info!("Upgrade available: {} -> {}", self.identity.version(), latest_version);
+                info!(
+                    "Upgrade available: {} -> {}",
+                    self.identity.version(),
+                    latest_version
+                );
                 // Perform self-update
                 match Updater::new() {
                     Ok(updater) => {
@@ -193,7 +306,9 @@ impl HeartbeatLoop {
                                 {
                                     use std::os::unix::process::CommandExt;
                                     let exe = std::env::current_exe().unwrap();
-                                    let err = std::process::Command::new(exe).args(std::env::args_os().skip(1)).exec();
+                                    let err = std::process::Command::new(exe)
+                                        .args(std::env::args_os().skip(1))
+                                        .exec();
                                     error!("Failed to exec after upgrade: {}", err);
                                 }
                                 #[cfg(not(unix))]
@@ -232,10 +347,10 @@ mod tests {
     fn test_metrics_uptime() {
         let start = Instant::now();
         std::thread::sleep(Duration::from_millis(100));
-        
+
         let elapsed = start.elapsed().as_secs();
         // Just verify it doesn't panic and we can get elapsed time
-        let _ = elapsed; 
+        let _ = elapsed;
     }
 
     #[test]

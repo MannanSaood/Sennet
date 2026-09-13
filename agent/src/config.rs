@@ -4,8 +4,8 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
 use std::fs;
+use std::path::{Path, PathBuf};
 
 /// Agent configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,7 +66,8 @@ impl Config {
             let config = Config {
                 api_key,
                 server_url,
-                log_level: std::env::var("SENNET_LOG_LEVEL").unwrap_or_else(|_| default_log_level()),
+                log_level: std::env::var("SENNET_LOG_LEVEL")
+                    .unwrap_or_else(|_| default_log_level()),
                 interface: std::env::var("SENNET_INTERFACE").ok(),
                 heartbeat_interval_secs: std::env::var("SENNET_HEARTBEAT_INTERVAL")
                     .ok()
@@ -81,7 +82,7 @@ impl Config {
 
         // Try config files
         let paths = Self::config_paths();
-        
+
         for path in &paths {
             if path.exists() {
                 return Self::load_from_file(path);
@@ -141,6 +142,18 @@ impl Config {
         if !self.server_url.starts_with("http://") && !self.server_url.starts_with("https://") {
             anyhow::bail!("server_url must start with http:// or https://");
         }
+        if self.heartbeat_interval_secs == 0 || self.heartbeat_interval_secs > 3600 {
+            anyhow::bail!("heartbeat_interval_secs must be between 1 and 3600");
+        }
+        if self.state_dir.as_os_str().is_empty() {
+            anyhow::bail!("state_dir cannot be empty");
+        }
+        if !matches!(
+            self.log_level.as_str(),
+            "trace" | "debug" | "info" | "warn" | "error"
+        ) {
+            anyhow::bail!("log_level must be trace, debug, info, warn, or error");
+        }
         Ok(())
     }
 
@@ -164,7 +177,11 @@ impl Config {
         // 4. Windows ProgramData
         #[cfg(windows)]
         if let Ok(program_data) = std::env::var("ProgramData") {
-            paths.push(PathBuf::from(program_data).join("sennet").join("config.yaml"));
+            paths.push(
+                PathBuf::from(program_data)
+                    .join("sennet")
+                    .join("config.yaml"),
+            );
         }
 
         paths
@@ -187,7 +204,7 @@ mod tests {
         // Clear any env vars that might interfere
         std::env::remove_var("SENNET_API_KEY");
         std::env::remove_var("SENNET_SERVER_URL");
-        
+
         let dir = TempDir::new().unwrap();
         let config_content = r#"
 api_key: sk_test123456789
@@ -195,9 +212,9 @@ server_url: https://sennet.example.com
 log_level: debug
 "#;
         let path = create_test_config(&dir, config_content);
-        
+
         let config = Config::load_from_file(&path).unwrap();
-        
+
         assert_eq!(config.api_key, "sk_test123456789");
         assert_eq!(config.server_url, "https://sennet.example.com");
         assert_eq!(config.log_level, "debug");
@@ -213,9 +230,9 @@ server_url: https://sennet.example.com
 interface: eth0
 "#;
         let path = create_test_config(&dir, config_content);
-        
+
         let config = Config::load_from_file(&path).unwrap();
-        
+
         assert_eq!(config.interface, Some("eth0".to_string()));
     }
 
@@ -224,14 +241,14 @@ interface: eth0
         // Clear all env vars that could override
         std::env::remove_var("SENNET_API_KEY");
         std::env::remove_var("SENNET_SERVER_URL");
-        
+
         let dir = TempDir::new().unwrap();
         let config_content = r#"
 api_key: invalid_key
 server_url: https://sennet.example.com
 "#;
         let path = create_test_config(&dir, config_content);
-        
+
         let result = Config::load_from_file(&path);
         assert!(result.is_err(), "Expected error for invalid api_key prefix");
         assert!(result.unwrap_err().to_string().contains("sk_"));
@@ -245,7 +262,7 @@ api_key: sk_test123456789
 server_url: not-a-url
 "#;
         let path = create_test_config(&dir, config_content);
-        
+
         let result = Config::load_from_file(&path);
         assert!(result.is_err());
     }
@@ -258,9 +275,9 @@ api_key: sk_test123456789
 server_url: https://sennet.example.com
 "#;
         let path = create_test_config(&dir, config_content);
-        
+
         let config = Config::load_from_file(&path).unwrap();
-        
+
         assert_eq!(config.log_level, "info");
         assert_eq!(config.heartbeat_interval_secs, 30);
     }
@@ -277,11 +294,11 @@ api_key: sk_file_key
 server_url: https://file.example.com
 "#;
         let path = create_test_config(&dir, config_content);
-        
+
         std::env::set_var("SENNET_API_KEY", "sk_env_key");
         let config = Config::load_from_file(&path).unwrap();
         std::env::remove_var("SENNET_API_KEY");
-        
+
         assert_eq!(config.api_key, "sk_env_key");
     }
 }

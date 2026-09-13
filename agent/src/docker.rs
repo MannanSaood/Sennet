@@ -3,6 +3,7 @@
 //! Provides container detection and monitoring for standalone Docker environments
 //! (not Kubernetes). For K8s environments, use the k8s.rs module instead.
 
+#[cfg(target_os = "linux")]
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::Path;
@@ -79,40 +80,39 @@ pub fn detect_runtime() -> DockerRuntime {
 #[cfg(target_os = "linux")]
 pub fn get_container_id_from_pid(pid: u32) -> Option<String> {
     use std::fs;
-    
+
     // Read the cgroup file for the process
     let cgroup_path = format!("/proc/{}/cgroup", pid);
     let content = fs::read_to_string(&cgroup_path).ok()?;
-    
+
     for line in content.lines() {
         // Parse cgroup line: hierarchy-ID:controller:path
         let parts: Vec<&str> = line.split(':').collect();
         if parts.len() >= 3 {
             let path = parts[2];
-            
+
             // Docker format: /docker/<container_id>
             if path.starts_with("/docker/") {
-                return path.strip_prefix("/docker/")
-                    .map(|s| s.to_string());
+                return path.strip_prefix("/docker/").map(|s| s.to_string());
             }
-            
+
             // Docker with systemd cgroup: /system.slice/docker-<id>.scope
             if let Some(id) = extract_docker_systemd_id(path) {
                 return Some(id);
             }
-            
+
             // Containerd format: /system.slice/containerd-<id>.scope
             if let Some(id) = extract_containerd_id(path) {
                 return Some(id);
             }
-            
+
             // Podman format: /user.slice/user-1000.slice/.../libpod-<id>.scope
             if let Some(id) = extract_podman_id(path) {
                 return Some(id);
             }
         }
     }
-    
+
     None
 }
 
@@ -137,7 +137,7 @@ fn extract_docker_systemd_id(path: &str) -> Option<String> {
 /// Extract container ID from containerd cgroup path
 fn extract_containerd_id(path: &str) -> Option<String> {
     // Multiple possible formats
-    
+
     // Format: /system.slice/containerd-<id>.scope
     if path.contains("containerd-") && path.ends_with(".scope") {
         let id = path.rsplit("containerd-").next()?;
@@ -146,7 +146,7 @@ fn extract_containerd_id(path: &str) -> Option<String> {
             return Some(id.to_string());
         }
     }
-    
+
     // Format: /kubepods/burstable/pod.../cri-containerd-<id>.scope
     if path.contains("cri-containerd-") {
         let id = path.rsplit("cri-containerd-").next()?;
@@ -155,7 +155,7 @@ fn extract_containerd_id(path: &str) -> Option<String> {
             return Some(id.to_string());
         }
     }
-    
+
     None
 }
 
@@ -187,30 +187,31 @@ pub fn is_process_containerized(_pid: u32) -> bool {
 #[cfg(target_os = "linux")]
 pub fn is_agent_in_container() -> bool {
     // Check for container indicators
-    
+
     // Check /.dockerenv file (Docker specific)
     if Path::new("/.dockerenv").exists() {
         return true;
     }
-    
+
     // Check for Kubernetes-mounted service account
     if Path::new("/var/run/secrets/kubernetes.io").exists() {
         return true;
     }
-    
+
     // Check cgroup for container ID
     let cgroup_path = "/proc/1/cgroup";
     if let Ok(content) = std::fs::read_to_string(cgroup_path) {
         for line in content.lines() {
-            if line.contains("/docker/") || 
-               line.contains("/kubepods/") ||
-               line.contains("/libpod-") ||
-               line.contains("containerd") {
+            if line.contains("/docker/")
+                || line.contains("/kubepods/")
+                || line.contains("/libpod-")
+                || line.contains("containerd")
+            {
                 return true;
             }
         }
     }
-    
+
     false
 }
 
@@ -231,16 +232,18 @@ pub struct DockerRuntimeInfo {
 pub fn get_runtime_info() -> DockerRuntimeInfo {
     let runtime = detect_runtime();
     let socket_available = is_docker_available();
-    
+
     #[cfg(target_os = "linux")]
     let agent_containerized = is_agent_in_container();
-    
+
     #[cfg(not(target_os = "linux"))]
     let agent_containerized = false;
-    
-    info!("Docker runtime: {:?}, socket: {}, agent in container: {}", 
-          runtime, socket_available, agent_containerized);
-    
+
+    info!(
+        "Docker runtime: {:?}, socket: {}, agent in container: {}",
+        runtime, socket_available, agent_containerized
+    );
+
     DockerRuntimeInfo {
         runtime,
         socket_available,

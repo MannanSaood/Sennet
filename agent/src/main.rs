@@ -3,33 +3,33 @@
 //! This agent connects to the Sennet control plane, sends heartbeats,
 //! and runs eBPF programs for packet analysis.
 
-mod config;
-mod identity;
-mod heartbeat;
-mod client;
-mod interface;
-mod ebpf;
-mod upgrade;
-mod status;
-mod tui;
-mod init;
-mod trace;
-mod k8s;
-mod flows;
-mod crypto;
 mod btf;
+mod client;
+mod config;
+mod crypto;
 mod docker;
+mod ebpf;
+mod flows;
+mod heartbeat;
+mod identity;
+mod init;
+mod interface;
+mod k8s;
+mod status;
+mod trace;
+mod tui;
+mod upgrade;
 
 use anyhow::Result;
-use tracing::{info, error, warn};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-use tokio::signal;
 use colored::Colorize;
+use tokio::signal;
+use tracing::{error, info, warn};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-use crate::config::Config;
-use crate::identity::IdentityManager;
-use crate::heartbeat::HeartbeatLoop;
 use crate::client::SentinelClient;
+use crate::config::Config;
+use crate::heartbeat::HeartbeatLoop;
+use crate::identity::IdentityManager;
 use crate::upgrade::Updater;
 
 #[tokio::main]
@@ -65,7 +65,7 @@ async fn main() -> Result<()> {
             "upgrade" => {
                 info!("Checking for updates...");
                 let updater = Updater::new()?;
-                
+
                 match updater.check_upgrade()? {
                     Some(version) => {
                         info!("New version available: v{}", version);
@@ -84,7 +84,11 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
             "top" => {
-                if args.iter().any(|a|a == "--json") { tui::snapshot_json()?; } else { tui::run()?; }
+                if args.iter().any(|a| a == "--json") {
+                    tui::snapshot_json()?;
+                } else {
+                    tui::run()?;
+                }
                 return Ok(());
             }
             "trace" => {
@@ -120,7 +124,10 @@ async fn main() -> Result<()> {
             cmd => {
                 eprintln!("{} Unknown command: '{}'", "Error:".red(), cmd);
                 eprintln!();
-                eprintln!("Run '{}' for a list of available commands.", "sennet help".cyan());
+                eprintln!(
+                    "Run '{}' for a list of available commands.",
+                    "sennet help".cyan()
+                );
                 std::process::exit(1);
             }
         }
@@ -170,7 +177,10 @@ async fn main() -> Result<()> {
     #[cfg(target_os = "linux")]
     let _daemon_lock = {
         use std::os::fd::AsRawFd;
-        let lock = std::fs::OpenOptions::new().create(true).write(true).open("/run/sennet.lock")?;
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open("/run/sennet.lock")?;
         if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             anyhow::bail!("Another Sennet daemon owns the collector namespace");
         }
@@ -191,7 +201,10 @@ async fn main() -> Result<()> {
                 Some(mgr)
             }
             Err(e) => {
-                warn!("Failed to load eBPF programs: {}. Continuing without packet analysis.", e);
+                warn!(
+                    "Failed to load eBPF programs: {}. Continuing without packet analysis.",
+                    e
+                );
                 None
             }
         }
@@ -204,8 +217,9 @@ async fn main() -> Result<()> {
 
     // Start heartbeat loop
     let heartbeat = HeartbeatLoop::new(config.clone(), identity, client);
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let heartbeat_handle = tokio::spawn(async move {
-        if let Err(e) = heartbeat.run().await {
+        if let Err(e) = heartbeat.run(shutdown_rx).await {
             error!("Heartbeat loop failed: {}", e);
         }
     });
@@ -216,15 +230,19 @@ async fn main() -> Result<()> {
 
     // Graceful shutdown
     warn!("Shutdown signal received, stopping...");
-    heartbeat_handle.abort();
-    
+    let _ = shutdown_tx.send(true);
+    match tokio::time::timeout(std::time::Duration::from_secs(15), heartbeat_handle).await {
+        Ok(Ok(())) => info!("Exporter drained"),
+        Ok(Err(error)) => warn!("Exporter task failed during shutdown: {}", error),
+        Err(_) => warn!("Exporter drain deadline exceeded; durable spool retained for restart"),
+    }
+
     info!("Agent stopped");
     Ok(())
 }
 
 fn init_tracing() {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     tracing_subscriber::registry()
         .with(filter)
@@ -241,12 +259,27 @@ fn print_help() {
     println!();
     println!("{}", "COMMANDS:".yellow());
     println!("    {}       Run the agent daemon", "(none)".cyan());
-    println!("    {}        Initialize configuration interactively", "init".cyan());
-    println!("    {}      Display agent status and connection info", "status".cyan());
-    println!("    {}         Live traffic monitoring dashboard", "top".cyan());
+    println!(
+        "    {}        Initialize configuration interactively",
+        "init".cyan()
+    );
+    println!(
+        "    {}      Display agent status and connection info",
+        "status".cyan()
+    );
+    println!(
+        "    {}         Live traffic monitoring dashboard",
+        "top".cyan()
+    );
     println!("    {}       One-shot packet tracing", "trace".cyan());
-    println!("    {}       Active flows with PID attribution", "flows".cyan());
-    println!("    {}    K8s pod connectivity diagnosis", "diagnose".cyan());
+    println!(
+        "    {}       Active flows with PID attribution",
+        "flows".cyan()
+    );
+    println!(
+        "    {}    K8s pod connectivity diagnosis",
+        "diagnose".cyan()
+    );
     println!("    {}     Check for and install updates", "upgrade".cyan());
     println!("    {}     Print version information", "version".cyan());
     println!("    {}        Show this help message", "help".cyan());
@@ -296,7 +329,10 @@ async fn shutdown_signal() {
 // =============================================================================
 
 fn print_diagnose_help() {
-    println!("{}", "Sennet Diagnose - Kubernetes Connectivity Diagnosis".bold());
+    println!(
+        "{}",
+        "Sennet Diagnose - Kubernetes Connectivity Diagnosis".bold()
+    );
     println!("Check connectivity between two pods and detect blocking NetworkPolicies");
     println!();
     println!("{}", "USAGE:".yellow());
@@ -328,7 +364,7 @@ async fn run_diagnose(args: &[String]) -> Result<()> {
     let mut source_pod: Option<String> = None;
     let mut target_pod: Option<String> = None;
     let mut namespace: Option<String> = None;
-    
+
     let mut i = 0;
     while i < args.len() {
         let arg = &args[i];
@@ -356,7 +392,7 @@ async fn run_diagnose(args: &[String]) -> Result<()> {
         }
         i += 1;
     }
-    
+
     // Validate required arguments
     let source = match source_pod {
         Some(s) => s,
@@ -366,7 +402,7 @@ async fn run_diagnose(args: &[String]) -> Result<()> {
             std::process::exit(1);
         }
     };
-    
+
     let target = match target_pod {
         Some(t) => t,
         None => {
@@ -375,38 +411,48 @@ async fn run_diagnose(args: &[String]) -> Result<()> {
             std::process::exit(1);
         }
     };
-    
+
     info!("Diagnosing connectivity: {} -> {}", source, target);
-    
+
     // Initialize K8s manager
     let k8s_manager = match k8s::K8sManager::new().await {
         Ok(mgr) => mgr,
         Err(e) => {
-            eprintln!("{} Failed to initialize Kubernetes client: {}", "Error:".red(), e);
+            eprintln!(
+                "{} Failed to initialize Kubernetes client: {}",
+                "Error:".red(),
+                e
+            );
             std::process::exit(1);
         }
     };
-    
+
     // Check if in cluster
     if !k8s_manager.is_in_cluster() {
-        eprintln!("{} Not running inside a Kubernetes cluster", "Warning:".yellow());
+        eprintln!(
+            "{} Not running inside a Kubernetes cluster",
+            "Warning:".yellow()
+        );
         eprintln!("The diagnose command requires access to the Kubernetes API.");
         eprintln!();
         eprintln!("To use this command:");
         eprintln!("  1. Run sennet inside a Kubernetes pod with appropriate RBAC");
         eprintln!("  2. Or configure kubectl and set KUBECONFIG environment variable");
     }
-    
+
     // Start sync to populate caches
     if let Err(e) = k8s_manager.start_sync().await {
         warn!("Failed to start K8s sync: {}", e);
     }
-    
+
     // Give time for initial cache population
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    
+
     // Run diagnosis
-    match k8s_manager.diagnose_connectivity(&source, &target, namespace.as_deref()).await {
+    match k8s_manager
+        .diagnose_connectivity(&source, &target, namespace.as_deref())
+        .await
+    {
         Ok(result) => {
             println!("{}", result.format_output());
         }
@@ -415,6 +461,6 @@ async fn run_diagnose(args: &[String]) -> Result<()> {
             std::process::exit(1);
         }
     }
-    
+
     Ok(())
 }

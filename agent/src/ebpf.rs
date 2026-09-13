@@ -2,7 +2,7 @@
 //!
 //! Loads and manages the TC eBPF programs and kfree_skb tracepoint.
 //! Reads counters and drop events.
-//! On non-Linux platforms, provides a mock implementation.
+//! Unsupported platforms fail explicitly; they never return synthetic zeros.
 //!
 //! Note: Types mirror sennet-common for binary compatibility with eBPF programs.
 //! These types are used by: heartbeat (metrics), tui (live display), trace (drop events).
@@ -46,7 +46,7 @@ unsafe impl aya::Pod for DropEvent {}
 #[allow(dead_code)] // Used on Linux
 pub fn drop_reason_str(reason: u32) -> &'static str {
     match reason {
-        0 => "NO_REASON",       // Kernel doesn't support drop reasons or couldn't read
+        0 => "NO_REASON", // Kernel doesn't support drop reasons or couldn't read
         1 => "NOT_SPECIFIED",
         2 => "NO_SOCKET",
         3 => "PKT_TOO_SMALL",
@@ -237,15 +237,15 @@ pub fn format_ip(ip: u32) -> String {
 use {
     aya::{
         include_bytes_aligned,
-        programs::{tc, SchedClassifier, TcAttachType, TracePoint, KProbe},
-        maps::{PerCpuArray, HashMap as LruHashMap},
+        maps::{HashMap as LruHashMap, PerCpuArray},
+        programs::{tc, KProbe, SchedClassifier, TcAttachType, TracePoint},
         Bpf,
     },
     std::path::Path,
 };
 
 /// eBPF program manager
-/// 
+///
 /// On Linux: Loads and attaches TC classifiers and tracepoints
 /// On other platforms: Provides a mock implementation for development
 #[allow(dead_code)] // Used only on Linux; mock on other platforms
@@ -267,51 +267,67 @@ impl EbpfManager {
     #[cfg(target_os = "linux")]
     pub fn load_and_attach(interface: &str) -> Result<Self> {
         tracing::info!("Loading eBPF programs...");
-        
+
         // Load the eBPF binary with proper alignment for ELF parsing
         // NOTE: Must use include_bytes_aligned! instead of include_bytes! because
         // the ELF parser requires 8-byte aligned memory, which include_bytes! doesn't guarantee
         #[cfg(feature = "embed_bpf")]
-        let ebpf_bytes: &[u8] = include_bytes_aligned!(concat!(env!("OUT_DIR"), "/sennet_ebpf.bin"));
-        
+        let ebpf_bytes: &[u8] =
+            include_bytes_aligned!(concat!(env!("OUT_DIR"), "/sennet_ebpf.bin"));
+
         #[cfg(not(feature = "embed_bpf"))]
-        let ebpf_bytes: &[u8] = include_bytes_aligned!("../sennet-ebpf/target/bpfel-unknown-none/release/sennet-ebpf");
-        
+        let ebpf_bytes: &[u8] =
+            include_bytes_aligned!("../sennet-ebpf/target/bpfel-unknown-none/release/sennet-ebpf");
+
         // Debug: Log embedded binary info
         tracing::info!("eBPF binary size: {} bytes", ebpf_bytes.len());
         if ebpf_bytes.len() >= 4 {
             tracing::info!(
                 "eBPF ELF magic: {:02x} {:02x} {:02x} {:02x} (expected: 7f 45 4c 46 = ELF)",
-                ebpf_bytes[0], ebpf_bytes[1], ebpf_bytes[2], ebpf_bytes[3]
+                ebpf_bytes[0],
+                ebpf_bytes[1],
+                ebpf_bytes[2],
+                ebpf_bytes[3]
             );
         }
-        
+
         // Comprehensive ELF64 header inspection
         if ebpf_bytes.len() >= 64 {
             // ELF64 header fields (all offsets for 64-bit ELF)
-            let ei_class = ebpf_bytes[4];  // 1=32-bit, 2=64-bit
-            let ei_data = ebpf_bytes[5];   // 1=LE, 2=BE
+            let ei_class = ebpf_bytes[4]; // 1=32-bit, 2=64-bit
+            let ei_data = ebpf_bytes[5]; // 1=LE, 2=BE
             let ei_version = ebpf_bytes[6];
             let ei_osabi = ebpf_bytes[7];
-            
+
             let e_type = u16::from_le_bytes([ebpf_bytes[16], ebpf_bytes[17]]);
             let e_machine = u16::from_le_bytes([ebpf_bytes[18], ebpf_bytes[19]]);
-            let e_version = u32::from_le_bytes([ebpf_bytes[20], ebpf_bytes[21], ebpf_bytes[22], ebpf_bytes[23]]);
-            
+            let e_version = u32::from_le_bytes([
+                ebpf_bytes[20],
+                ebpf_bytes[21],
+                ebpf_bytes[22],
+                ebpf_bytes[23],
+            ]);
+
             // Key fields for alignment validation
-            let e_ehsize = u16::from_le_bytes([ebpf_bytes[52], ebpf_bytes[53]]);  // ELF header size
+            let e_ehsize = u16::from_le_bytes([ebpf_bytes[52], ebpf_bytes[53]]); // ELF header size
             let e_phentsize = u16::from_le_bytes([ebpf_bytes[54], ebpf_bytes[55]]); // Program header entry size
-            let e_phnum = u16::from_le_bytes([ebpf_bytes[56], ebpf_bytes[57]]);     // Number of program headers
+            let e_phnum = u16::from_le_bytes([ebpf_bytes[56], ebpf_bytes[57]]); // Number of program headers
             let e_shentsize = u16::from_le_bytes([ebpf_bytes[58], ebpf_bytes[59]]); // Section header entry size
-            let e_shnum = u16::from_le_bytes([ebpf_bytes[60], ebpf_bytes[61]]);     // Number of section headers
-            let e_shstrndx = u16::from_le_bytes([ebpf_bytes[62], ebpf_bytes[63]]);  // Section name string table index
-            
+            let e_shnum = u16::from_le_bytes([ebpf_bytes[60], ebpf_bytes[61]]); // Number of section headers
+            let e_shstrndx = u16::from_le_bytes([ebpf_bytes[62], ebpf_bytes[63]]); // Section name string table index
+
             // Section header offset (8 bytes at offset 40)
             let e_shoff = u64::from_le_bytes([
-                ebpf_bytes[40], ebpf_bytes[41], ebpf_bytes[42], ebpf_bytes[43],
-                ebpf_bytes[44], ebpf_bytes[45], ebpf_bytes[46], ebpf_bytes[47]
+                ebpf_bytes[40],
+                ebpf_bytes[41],
+                ebpf_bytes[42],
+                ebpf_bytes[43],
+                ebpf_bytes[44],
+                ebpf_bytes[45],
+                ebpf_bytes[46],
+                ebpf_bytes[47],
             ]);
-            
+
             tracing::info!("=== ELF64 Header Inspection ===");
             tracing::info!("EI_CLASS: {} (expected 2 for 64-bit)", ei_class);
             tracing::info!("EI_DATA: {} (expected 1 for little-endian)", ei_data);
@@ -327,7 +343,7 @@ impl EbpfManager {
             tracing::info!("e_shnum: {}", e_shnum);
             tracing::info!("e_shstrndx: {}", e_shstrndx);
             tracing::info!("e_shoff: {} (section headers at byte offset)", e_shoff);
-            
+
             // Validate critical alignment requirements
             if e_ehsize != 64 {
                 tracing::error!("INVALID: ELF header size {} != 64", e_ehsize);
@@ -336,20 +352,27 @@ impl EbpfManager {
                 tracing::error!("INVALID: Section header entry size {} != 64", e_shentsize);
             }
             if e_shoff as usize > ebpf_bytes.len() {
-                tracing::error!("INVALID: Section header offset {} > file size {}", e_shoff, ebpf_bytes.len());
+                tracing::error!(
+                    "INVALID: Section header offset {} > file size {}",
+                    e_shoff,
+                    ebpf_bytes.len()
+                );
             }
             if e_shoff % 8 != 0 {
-                tracing::error!("INVALID: Section header offset {} not 8-byte aligned", e_shoff);
+                tracing::error!(
+                    "INVALID: Section header offset {} not 8-byte aligned",
+                    e_shoff
+                );
             }
             if e_machine != 247 {
                 tracing::error!("INVALID: e_machine {} is not eBPF (247)", e_machine);
             }
         }
-        
+
         // Check for BTF sections
         let has_btf = ebpf_bytes.windows(4).any(|w| w == b".BTF");
         tracing::info!("eBPF contains BTF sections: {}", has_btf);
-        
+
         let mut bpf = match Bpf::load(ebpf_bytes) {
             Ok(b) => b,
             Err(e) => {
@@ -366,30 +389,19 @@ impl EbpfManager {
                 return Err(e.into());
             }
         };
-        
+
         // Pin path for maps
         let pin_path = Path::new("/sys/fs/bpf/sennet");
         if !pin_path.exists() {
             std::fs::create_dir_all(pin_path)?;
         }
 
-        // Pin COUNTERS map
-        tracing::info!("Pinning maps to /sys/fs/bpf/sennet...");
-        if let Some(map) = bpf.map_mut("COUNTERS") {
-            publish_map(map, &pin_path.join("counters"))?;
-        }
-        
-        // Pin DROP_EVENTS map (Phase 6.1)
-        if let Some(map) = bpf.map_mut("DROP_EVENTS") {
-            publish_map(map, &pin_path.join("drop_events"))?;
-        }
-
         // Attach TC Programs
         tracing::info!("Attaching TC classifiers to interface {}", interface);
-        
+
         // Add clsact qdisc to the interface (ignore error if it already exists)
         let _ = tc::qdisc_add_clsact(interface);
-        
+
         let ingress: &mut SchedClassifier = bpf.program_mut("tc_ingress").unwrap().try_into()?;
         ingress.load()?;
         ingress.attach(interface, TcAttachType::Ingress)?;
@@ -398,10 +410,21 @@ impl EbpfManager {
         egress.load()?;
         egress.attach(interface, TcAttachType::Egress)?;
 
-        // Try to attach kfree_skb tracepoint (Phase 6.1)
+        // Publish only after both classifiers attach. Readers continue using
+        // the previous pin until the replacement is ready.
+        tracing::info!("Publishing maps to /sys/fs/bpf/sennet...");
+        if let Some(map) = bpf.map_mut("COUNTERS") {
+            publish_map(map, &pin_path.join("counters"))?;
+        }
+
+        // Layout-dependent tracepoint and socket probes were removed. They must
+        // return only after a generated CO-RE implementation is verifier-tested.
         // This may fail on older kernels or if tracepoint doesn't exist
         let mut drop_tracing_enabled = false;
-        if let Some(prog) = bpf.program_mut("kfree_skb").filter(|_| std::env::var("SENNET_EXPERIMENTAL_KERNEL_PROBES").as_deref() == Ok("true")) {
+        if let Some(prog) = bpf
+            .program_mut("kfree_skb")
+            .filter(|_| std::env::var("SENNET_EXPERIMENTAL_KERNEL_PROBES").as_deref() == Ok("true"))
+        {
             match prog.try_into() as Result<&mut TracePoint, _> {
                 Ok(tp) => {
                     if let Err(e) = tp.load() {
@@ -423,7 +446,10 @@ impl EbpfManager {
 
         // Try to attach nf_hook_slow tracepoint (Phase 6.2)
         let mut nf_tracing_enabled = false;
-        if let Some(prog) = bpf.program_mut("nf_hook_slow").filter(|_| std::env::var("SENNET_EXPERIMENTAL_KERNEL_PROBES").as_deref() == Ok("true")) {
+        if let Some(prog) = bpf
+            .program_mut("nf_hook_slow")
+            .filter(|_| std::env::var("SENNET_EXPERIMENTAL_KERNEL_PROBES").as_deref() == Ok("true"))
+        {
             match prog.try_into() as Result<&mut TracePoint, _> {
                 Ok(tp) => {
                     if let Err(e) = tp.load() {
@@ -450,9 +476,12 @@ impl EbpfManager {
 
         // Try to attach flow tracking kprobes (Phase 8)
         let mut flow_tracing_enabled = false;
-        
+
         // tcp_connect kprobe - track outbound connections
-        if let Some(prog) = bpf.program_mut("tcp_connect").filter(|_| std::env::var("SENNET_EXPERIMENTAL_KERNEL_PROBES").as_deref() == Ok("true")) {
+        if let Some(prog) = bpf
+            .program_mut("tcp_connect")
+            .filter(|_| std::env::var("SENNET_EXPERIMENTAL_KERNEL_PROBES").as_deref() == Ok("true"))
+        {
             match prog.try_into() as Result<&mut KProbe, _> {
                 Ok(kp) => {
                     if let Err(e) = kp.load() {
@@ -469,9 +498,12 @@ impl EbpfManager {
                 }
             }
         }
-        
+
         // inet_csk_accept kprobe - track inbound connections
-        if let Some(prog) = bpf.program_mut("inet_csk_accept").filter(|_| std::env::var("SENNET_EXPERIMENTAL_KERNEL_PROBES").as_deref() == Ok("true")) {
+        if let Some(prog) = bpf
+            .program_mut("inet_csk_accept")
+            .filter(|_| std::env::var("SENNET_EXPERIMENTAL_KERNEL_PROBES").as_deref() == Ok("true"))
+        {
             match prog.try_into() as Result<&mut KProbe, _> {
                 Ok(kp) => {
                     if let Err(e) = kp.load() {
@@ -487,9 +519,12 @@ impl EbpfManager {
                 }
             }
         }
-        
+
         // tcp_close kprobe - track connection closures
-        if let Some(prog) = bpf.program_mut("tcp_close").filter(|_| std::env::var("SENNET_EXPERIMENTAL_KERNEL_PROBES").as_deref() == Ok("true")) {
+        if let Some(prog) = bpf
+            .program_mut("tcp_close")
+            .filter(|_| std::env::var("SENNET_EXPERIMENTAL_KERNEL_PROBES").as_deref() == Ok("true"))
+        {
             match prog.try_into() as Result<&mut KProbe, _> {
                 Ok(kp) => {
                     if let Err(e) = kp.load() {
@@ -505,16 +540,17 @@ impl EbpfManager {
                 }
             }
         }
-        
+
         // Pin FLOWS map if available
         if let Some(map) = bpf.map_mut("FLOWS") {
             publish_map(map, &pin_path.join("flows"))?;
         }
-        
+
         // Pin FLOW_EVENTS map if available
         if let Some(map) = bpf.map_mut("FLOW_EVENTS") {
             publish_map(map, &pin_path.join("flow_events"))?;
         }
+        cleanup_stale_pins(pin_path, &["counters"])?;
 
         Ok(Self {
             interface: interface.to_string(),
@@ -528,12 +564,12 @@ impl EbpfManager {
     /// Read current counters from eBPF maps
     #[cfg(target_os = "linux")]
     pub fn read_counters(&self) -> Result<PacketCounters> {
-        let counters_map: PerCpuArray<_, PacketCounters> = 
+        let counters_map: PerCpuArray<_, PacketCounters> =
             PerCpuArray::try_from(self.bpf.map("COUNTERS").unwrap())?;
-        
+
         // Sum across all CPUs
         let mut total = PacketCounters::default();
-        
+
         // Helper to sum counters for a given index
         let sum_values = |index: u32| -> Result<PacketCounters> {
             let values = counters_map.get(&index, 0)?;
@@ -563,39 +599,37 @@ impl EbpfManager {
     /// Read all active flows from eBPF LRU HashMap (Phase 8)
     #[cfg(target_os = "linux")]
     pub fn read_flows(&self) -> Result<Vec<(FlowKey, FlowInfo)>> {
-        let flows_map: LruHashMap<_, FlowKey, FlowInfo> = 
-            LruHashMap::try_from(self.bpf.map("FLOWS").ok_or_else(|| anyhow::anyhow!("FLOWS map not found"))?)?;
-        
+        let flows_map: LruHashMap<_, FlowKey, FlowInfo> = LruHashMap::try_from(
+            self.bpf
+                .map("FLOWS")
+                .ok_or_else(|| anyhow::anyhow!("FLOWS map not found"))?,
+        )?;
+
         let mut flows = Vec::new();
         for item in flows_map.iter() {
             if let Ok((key, value)) = item {
                 flows.push((key, value));
             }
         }
-        
+
         Ok(flows)
     }
 
     // Stub for non-Linux platforms
     #[cfg(not(target_os = "linux"))]
     pub fn load_and_attach(interface: &str) -> Result<Self> {
-        tracing::warn!("eBPF not supported on this platform, using mock");
-        Ok(Self {
-            interface: interface.to_string(),
-            drop_tracing_enabled: false,
-            nf_tracing_enabled: false,
-            flow_tracing_enabled: false,
-        })
+        let _ = interface;
+        anyhow::bail!("eBPF collection is unsupported: requires Linux 5.8+ on x86_64 or aarch64 with BPF, BTF, clsact, and bpffs")
     }
 
     #[cfg(not(target_os = "linux"))]
     pub fn read_counters(&self) -> Result<PacketCounters> {
-        Ok(PacketCounters::default())
+        anyhow::bail!("eBPF counters are unavailable on this operating system")
     }
 
     #[cfg(not(target_os = "linux"))]
     pub fn read_flows(&self) -> Result<Vec<(FlowKey, FlowInfo)>> {
-        Ok(Vec::new())
+        anyhow::bail!("flow collection is unavailable: non-portable socket probes were removed")
     }
 
     /// Get the attached interface name
@@ -635,24 +669,49 @@ mod tests {
         assert_eq!(nf_verdict_str(1), "ACCEPT");
     }
 
-    // This test only works on non-Linux (mock mode) or requires root on Linux
+    // Unsupported systems must never appear to collect zero traffic.
     #[test]
     #[cfg(not(target_os = "linux"))]
-    fn test_mock_manager() {
-        let manager = EbpfManager::load_and_attach("lo").unwrap();
-        assert_eq!(manager.interface(), "lo");
-        let counters = manager.read_counters().unwrap();
-        assert_eq!(counters.rx_packets, 0);
+    fn test_unsupported_manager_is_explicit() {
+        let error = match EbpfManager::load_and_attach("lo") {
+            Ok(_) => panic!("unsupported platform unexpectedly started collection"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("unsupported"));
     }
 }
 
 #[cfg(target_os = "linux")]
 fn publish_map(map: &mut aya::maps::Map, path: &std::path::Path) -> anyhow::Result<()> {
-    let temporary = path.with_extension(format!("new-{}",std::process::id()));
+    let temporary = path.with_extension(format!("new-{}", std::process::id()));
+    let backup = path.with_extension(format!("old-{}", std::process::id()));
     map.pin(&temporary)?;
-    if let Err(error) = std::fs::rename(&temporary,path) {
+    if path.exists() {
+        std::fs::rename(path, &backup)?;
+    }
+    if let Err(error) = std::fs::rename(&temporary, path) {
         let _ = std::fs::remove_file(&temporary);
+        if backup.exists() {
+            let _ = std::fs::rename(&backup, path);
+        }
         return Err(error.into());
+    }
+    if backup.exists() {
+        std::fs::remove_file(backup)?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn cleanup_stale_pins(directory: &std::path::Path, live: &[&str]) -> anyhow::Result<()> {
+    for entry in std::fs::read_dir(directory)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !live.contains(&name.as_ref()) {
+            std::fs::remove_file(entry.path())?;
+            tracing::info!("Removed stale Sennet pin {}", name);
+        }
     }
     Ok(())
 }

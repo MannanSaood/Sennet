@@ -11,7 +11,7 @@ embed_bpf = []
 
 [dependencies]
 # Async runtime
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "sync"] }
 
 # HTTP client (sync, lighter than reqwest)
 ureq = { version = "2", features = ["json"] }
