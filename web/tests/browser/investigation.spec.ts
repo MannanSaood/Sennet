@@ -1,0 +1,55 @@
+import { test, expect, type Page } from '@playwright/test';
+
+const now = Date.now();
+const spans = [
+  { id:'root', time:now-4000, signal:'trace', service:'checkout', name:'POST /checkout', trace_id:'trace-123456789', span_id:'root-span', duration_ms:120, status:'error', value:0, attributes:{environment:'production'} },
+  { id:'child', time:now-3980, signal:'trace', service:'payments', name:'authorize', trace_id:'trace-123456789', span_id:'child-span', parent_id:'missing-parent', duration_ms:70, status:'error', value:0, attributes:{'span.late':'true','span.link':'async-1',redaction:'applied'} },
+  { id:'log', time:now-3970, signal:'log', service:'payments', name:'card declined', trace_id:'trace-123456789', duration_ms:0, status:'error', value:0, attributes:{redaction:'applied'} },
+];
+
+async function mock(page: Page, options: {partial?:boolean;fail?:boolean} = {}) {
+  page.on('pageerror', error => console.log('PAGE_ERROR', error.message));
+  await page.route('**/api/**', async route => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.startsWith('/api/')) return route.continue();
+    if (url.pathname === '/api/session') return route.fulfill({json:{tenant:'browser-fixture',subject:'tester',role:'admin'}});
+    if (url.pathname === '/api/events') {
+      if (options.fail) return route.fulfill({status:503,json:{error:'fixture failure'}});
+      return route.fulfill({json:{events:spans,next_cursor:url.searchParams.get('trace_id')?'':'older-cursor',timestamp:now,partial:!!options.partial}});
+    }
+    if (url.pathname === '/api/summary') return route.fulfill({json:{events:3,errors:2,services:2,p95_ms:120,buckets:[{time:now-60000,events:1,errors:0},{time:now,events:2,errors:2}],by_service:[]}});
+    if (url.pathname === '/api/agents') return route.fulfill({json:[{id:'collector-1',version:'1.2.0',seen:now,collection:'running',metrics:{queue_depth:'7'}}]});
+    if (url.pathname === '/api/query') return route.fulfill({json:{version:'v1',points:[{time:now,value:42,count:2,group:{service:'checkout'},exemplars:['trace-123456789']}],comparison:[{time:now-3600000,value:38,count:2}],execution:{rows_scanned:3,bytes_scanned:512,elapsed_ms:2,partial:!!options.partial,partial_reasons:options.partial?['row_budget']:[],step_ms:1000}}});
+    if (url.pathname === '/api/dashboards') return route.request().method()==='POST' ? route.fulfill({json:{id:'saved'}}) : route.fulfill({json:[{id:'one',name:'Checkout health v1',path:'/dashboard/logs',range:'3600000',signal:'log',search:'',service:'checkout'}]});
+    if (url.pathname === '/api/alerts') return route.fulfill({json:[]});
+    return route.fulfill({status:404,json:{error:'No test fixture'}});
+  });
+}
+
+test('filter, pagination, trace drilldown, and keyboard dialog navigation', async ({page}, info) => {
+  await mock(page); await page.goto('/dashboard/logs');
+  await expect(page.getByRole('heading',{name:'Logs'})).toBeVisible();
+  await page.getByLabel('Query').fill('declined'); await page.getByRole('button',{name:'Run'}).click(); await expect(page).toHaveURL(/q=declined/);
+  await page.getByRole('button',{name:'Older page'}).click(); await expect(page).toHaveURL(/cursor=older-cursor/);
+  await page.getByRole('button',{name:'card declined',exact:true}).click(); await expect(page.getByRole('dialog')).toBeVisible();
+  await page.keyboard.press('Tab'); await page.keyboard.press('Shift+Tab'); await expect(page.getByRole('button',{name:'Close trace detail'})).toBeFocused();
+  await page.keyboard.press('Escape'); await expect(page.getByRole('dialog')).toBeHidden();
+  if (info.project.name==='desktop') await page.screenshot({path:'../docs/workstreams/assets/investigation-desktop.png',fullPage:true});
+});
+
+test('saved dashboard and partial analytical state', async ({page}) => {
+  await mock(page,{partial:true}); await page.goto('/dashboard');
+  await expect(page.getByText('Checkout health v1')).toBeVisible(); await page.getByRole('button',{name:'Save',exact:true}).last().click(); await expect(page.getByText(/Dashboard saved/)).toBeVisible();
+  await page.goto('/dashboard/metrics'); await expect(page.getByText(/Budget limit: row_budget/)).toBeVisible();
+});
+
+test('failed state is explicit', async ({page}) => {
+  await mock(page,{fail:true}); await page.goto('/dashboard/logs');
+  await expect(page.getByRole('alert').filter({hasText:'Query failed'})).toBeVisible();
+});
+
+test('mobile investigation layout', async ({page}, info) => {
+  test.skip(info.project.name!=='mobile','mobile project'); await mock(page); await page.goto('/dashboard/logs');
+  await expect(page.getByLabel('Investigation scope')).toBeVisible(); await expect(page.getByRole('heading',{name:'Logs'})).toBeVisible();
+  await page.screenshot({path:'../docs/workstreams/assets/investigation-mobile.png',fullPage:true});
+});

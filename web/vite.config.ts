@@ -12,4 +12,12 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  build: { rollupOptions: { output: { manualChunks(id) {
+    if (id.includes('recharts') || id.includes('d3-')) return 'charts';
+    if (id.includes('firebase')) return 'firebase';
+    if (id.includes('highlight.js')) return 'highlight';
+    if (id.includes('react-markdown')) return 'markdown-react';
+    if (/remark-|rehype-|unified|micromark|mdast|hast|unist/.test(id)) return 'markdown-core';
+    if (id.includes('node_modules/react') || id.includes('react-router') || id.includes('@tanstack/react-query')) return 'react-core';
+  } } } },
 })
