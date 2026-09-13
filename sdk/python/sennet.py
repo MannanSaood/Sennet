@@ -5,13 +5,23 @@ import contextlib, contextvars, json, logging, os, pathlib, threading, time, uui
 import urllib.error, urllib.request
 from decimal import Decimal
 _current = contextvars.ContextVar('sennet_span', default=None)
+AGENT_CONVENTION_VERSION = 'sennet.agent.v1'
+
+class ContentPolicy:
+    """Metadata-only by default. A hook may further redact metadata before spooling."""
+    def __init__(self, capture_content=False, redact=None, retention_class='metadata-30d'):
+        self.capture_content = bool(capture_content)
+        self.redact = redact or (lambda value: value)
+        self.retention_class = retention_class
 
 class Recorder:
-    def __init__(self, endpoint, key, service, spool='./sennet-outbox', max_bytes=20*1024*1024):
+    def __init__(self, endpoint, key, service, spool='./sennet-outbox', max_bytes=20*1024*1024,
+                 content_policy=None):
         self.endpoint, self.key, self.service = endpoint.rstrip('/'), key, service
         self.spool = pathlib.Path(spool)
         self.spool.mkdir(parents=True, exist_ok=True)
         self.max_bytes = max_bytes
+        self.content_policy = content_policy or ContentPolicy()
         self._lock = threading.Lock()
 
     def record(self, signal, name, attributes=None, **fields):
@@ -28,6 +38,52 @@ class Recorder:
                 f.write(payload); f.flush(); os.fsync(f.fileno())
             temporary.replace(temporary.with_suffix('.json'))
         return event['id']
+
+    def agent_event(self, kind, run_id, *, session_id='', workflow_id='', task_id='',
+                    agent_id='', agent_version='', model='', provider='', model_version='',
+                    prompt_id='', prompt_version='', tool_name='', tool_call_id='', handoff_id='',
+                    attempt=1, queue_wait_ms=None, cancellation_reason='', input_tokens=None,
+                    output_tokens=None, cached_tokens=None, pricing_version='', estimated_cost='',
+                    observed_cost='', currency='', evaluator='', evaluator_version='', outcome='',
+                    score='', links=None, metadata=None, content=None, event_id=None, **fields):
+        """Record sennet.agent.v1 metadata. Exact token counts and monetary values stay strings."""
+        if not run_id or kind not in {'run','session','workflow','task','agent','model','prompt','tool',
+                                      'handoff','retry','queue_wait','cancellation','tokens','cost',
+                                      'evaluation','outcome'}:
+            raise ValueError('valid agent event kind and run_id required')
+        attrs = {'sennet.agent.convention': AGENT_CONVENTION_VERSION, 'agent.event.kind': kind,
+                 'agent.run.id': run_id, 'agent.attempt': str(attempt),
+                 'content.captured': 'false', 'content.retention_class': self.content_policy.retention_class}
+        values = {'agent.session.id':session_id, 'agent.workflow.id':workflow_id,
+                  'agent.task.id':task_id, 'agent.id':agent_id, 'agent.version':agent_version,
+                  'gen_ai.request.model':model, 'gen_ai.provider.name':provider,
+                  'gen_ai.response.model':model_version, 'gen_ai.prompt.id':prompt_id,
+                  'gen_ai.prompt.version':prompt_version, 'gen_ai.tool.name':tool_name,
+                  'gen_ai.tool.call.id':tool_call_id, 'agent.handoff.id':handoff_id,
+                  'agent.queue.wait_ms':queue_wait_ms, 'agent.cancellation.reason':cancellation_reason,
+                  'gen_ai.usage.input_tokens':input_tokens, 'gen_ai.usage.output_tokens':output_tokens,
+                  'gen_ai.usage.cached_tokens':cached_tokens, 'gen_ai.pricing.version':pricing_version,
+                  'gen_ai.cost.estimated':str(estimated_cost), 'gen_ai.cost.observed':str(observed_cost),
+                  'gen_ai.cost.currency':currency, 'evaluation.evaluator':evaluator,
+                  'evaluation.evaluator.version':evaluator_version, 'evaluation.score':str(score),
+                  'agent.outcome':outcome}
+        attrs.update({k:str(v) for k,v in values.items() if v not in ('', None)})
+        attrs.update({str(k):str(v) for k,v in (metadata or {}).items()})
+        if links: attrs['span.links'] = ','.join(links)
+        if content is not None and self.content_policy.capture_content:
+            attrs['content.body'] = str(self.content_policy.redact(content))
+            attrs['content.captured'] = 'true'
+        if event_id is not None: fields['id'] = event_id
+        return self.record('agent', 'agent.'+kind, attrs, **fields)
+
+    @contextlib.contextmanager
+    def agent_span(self, kind, run_id, **metadata):
+        attributes = dict(metadata.pop('attributes', {}) or {})
+        attributes.update({'sennet.agent.convention':AGENT_CONVENTION_VERSION,
+                           'agent.event.kind':kind, 'agent.run.id':run_id})
+        with self.span('agent.'+kind, attributes=attributes, signal='agent',
+                       trace_id=metadata.pop('trace_id', None), parent_id=metadata.pop('parent_id', None)) as ctx:
+            yield ctx
 
     @contextlib.contextmanager
     def span(self, name, attributes=None, signal='agent', trace_id=None, parent_id=None):

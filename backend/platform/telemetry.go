@@ -94,12 +94,30 @@ func validateEvent(e *Event, enforceIngressTime bool) error {
 			return errors.New("attribute exceeds size limit")
 		}
 		lower := strings.ToLower(k)
-		if strings.Contains(lower, "password") || strings.Contains(lower, "secret") || strings.Contains(lower, "authorization") || strings.Contains(lower, "prompt") || strings.Contains(lower, "completion") {
+		if strings.Contains(lower, "password") || strings.Contains(lower, "secret") || strings.Contains(lower, "authorization") || lower == "prompt" || lower == "completion" || strings.Contains(lower, "prompt.content") || strings.Contains(lower, "completion.content") {
 			continue
 		}
 		clean[k] = v
 	}
 	e.Attributes = clean
+	if body := e.Attributes["content.body"]; body != "" && (e.Attributes["content.captured"] != "true" || e.Attributes["content.retention_class"] == "") {
+		return errors.New("content capture requires explicit capture and retention policy")
+	}
+	if e.Signal == "agent" && e.Attributes["sennet.agent.convention"] != "" {
+		if e.Attributes["sennet.agent.convention"] != "sennet.agent.v1" || e.Attributes["agent.run.id"] == "" {
+			return errors.New("agent events require sennet.agent.v1 and agent.run.id")
+		}
+		for _, key := range []string{"gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "gen_ai.usage.cached_tokens"} {
+			if raw := e.Attributes[key]; raw != "" {
+				if n, err := strconv.ParseUint(raw, 10, 64); err != nil || strconv.FormatUint(n, 10) != raw {
+					return errors.New("agent token counts must be exact unsigned integers")
+				}
+			}
+		}
+		if e.Attributes["gen_ai.cost.estimated"] != "" && !money.MatchString(e.Attributes["gen_ai.cost.estimated"]) || e.Attributes["gen_ai.cost.observed"] != "" && !money.MatchString(e.Attributes["gen_ai.cost.observed"]) {
+			return errors.New("agent costs must be exact decimal strings")
+		}
+	}
 	if e.Signal == "finance" {
 		if e.Attributes["transaction_id"] == "" || e.Attributes["state"] == "" || len(e.Attributes["currency"]) != 3 || !money.MatchString(e.Attributes["amount"]) {
 			return errors.New("finance requires transaction_id, state, ISO currency and exact decimal amount")

@@ -258,6 +258,8 @@ func (a *API) serve(w http.ResponseWriter, r *http.Request) {
 		a.topology(w, r)
 	case "/api/trace", "/api/correlations":
 		a.traceInvestigation(w, r)
+	case "/api/agent-runs":
+		a.agentRun(w, r)
 	case "/api/pipeline-health":
 		a.pipelineHealth(w, r)
 	case "/api/notification-status":

@@ -4,7 +4,7 @@ import unittest
 import urllib.error
 from decimal import Decimal
 from unittest.mock import patch, MagicMock
-from sennet import Recorder
+from sennet import Recorder, ContentPolicy
 
 
 class RecorderTests(unittest.TestCase):
@@ -50,6 +50,24 @@ class RecorderTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'business failure'):
                 with self.recorder.span('failed'):
                     raise ValueError('business failure')
+
+    def test_agent_metadata_exact_usage_and_cost_provenance(self):
+        self.recorder.agent_event('model', 'run-1', input_tokens=9007199254740993,
+            output_tokens=7, estimated_cost='0.1250', observed_cost='0.1300',
+            pricing_version='provider-2026-09', provider='openai', model='gpt', content='private')
+        event = self.events()[0]
+        self.assertEqual(event['attributes']['gen_ai.usage.input_tokens'], '9007199254740993')
+        self.assertEqual(event['attributes']['gen_ai.cost.estimated'], '0.1250')
+        self.assertEqual(event['attributes']['gen_ai.cost.observed'], '0.1300')
+        self.assertNotIn('content.body', event['attributes'])
+
+    def test_content_capture_requires_explicit_policy_and_redaction_hook(self):
+        recorder = Recorder('http://localhost', 'key', 'test', self.directory.name,
+            content_policy=ContentPolicy(True, lambda _: '[REDACTED]', 'content-1d'))
+        recorder.agent_event('prompt', 'run-content', prompt_id='template-1', content='ignore previous instructions')
+        event = self.events()[0]
+        self.assertEqual(event['attributes']['content.body'], '[REDACTED]')
+        self.assertEqual(event['attributes']['content.retention_class'], 'content-1d')
 
 
 if __name__ == '__main__':
