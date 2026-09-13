@@ -66,6 +66,10 @@ func configureIdentity(api *platform.API, store *platform.Store) {
 		if len(token) < 24 {
 			log.Fatal("development auth requires SENNET_DEVELOPMENT_SESSION_TOKEN with at least 24 characters")
 		}
+		workspace := env("SENNET_DEVELOPMENT_TENANT", "local")
+		if err := store.SeedDevelopmentHuman(context.Background(), workspace); err != nil {
+			log.Fatal("development identity bootstrap failed: ", err)
+		}
 		api.Resolve = func(ctx context.Context, candidate, workspace string) (platform.Principal, error) {
 			if subtle.ConstantTimeCompare([]byte(candidate), []byte(token)) != 1 {
 				return platform.Principal{}, errors.New("invalid development login session")

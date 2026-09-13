@@ -275,6 +275,35 @@ func (s *Store) Seed(ctx context.Context, token, workspace string) error {
 	return tx.Commit()
 }
 
+// SeedDevelopmentHuman provisions only the deterministic local development
+// identity. Callers must gate this behind non-production development mode.
+func (s *Store) SeedDevelopmentHuman(ctx context.Context, workspace string) error {
+	now := time.Now().UnixMilli()
+	org := "org_" + digest("bootstrap:" + workspace)[:24]
+	subject := "human_" + digest("development:development-login")[:24]
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	items := []struct {
+		q string
+		a []any
+	}{
+		{`INSERT INTO platform_organizations(id,name,status,created) VALUES(?,?,?,?) ON CONFLICT(id) DO NOTHING`, []any{org, workspace, "active", now}},
+		{`INSERT INTO platform_workspaces(id,organization_id,name,status,created) VALUES(?,?,?,?,?) ON CONFLICT(id) DO NOTHING`, []any{workspace, org, workspace, "active", now}},
+		{`INSERT INTO platform_subjects(id,type,issuer,external_id,display_name,status,created) VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`, []any{subject, "human", "development", "development-login", "Development user", "active", now}},
+		{`INSERT INTO platform_memberships(id,organization_id,human_id,status,created) VALUES(?,?,?,?,?) ON CONFLICT(organization_id,human_id) DO NOTHING`, []any{randomID(), org, subject, "active", now}},
+		{`INSERT INTO platform_role_assignments(id,organization_id,workspace_id,subject_type,subject_id,role,created) VALUES(?,?,?,?,?,?,?) ON CONFLICT(organization_id,workspace_id,subject_type,subject_id) DO NOTHING`, []any{randomID(), org, workspace, "human", subject, "admin", now}},
+	}
+	for _, item := range items {
+		if _, err = tx.ExecContext(ctx, s.q(item.q), item.a...); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (s *Store) Authenticate(ctx context.Context, token string) (Principal, error) {
 	var p Principal
 	var expires int64

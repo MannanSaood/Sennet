@@ -54,3 +54,11 @@ The website and workspace have been rebuilt around real queries: historical sear
 7. Implement domain-specific finance source completeness and state machines with users' actual schemas. Current inspection is limited to 1,000 events and does not establish ledger correctness or regulatory compliance.
 
 See `audit-validation.md` for executed checks. Unexecuted gates are not passes.
+
+## Integration release update — 2026-09-14
+
+The ordered workstream history is integrated on `codex/integration-release`. Organization memberships and explicit workspace roles are implemented in the active backend; the older SEC-01/SEC-02 note above saying shared membership is absent is superseded. Development auth now provisions only its deterministic local human, membership, and workspace role outside production; the isolation/idempotence test passes.
+
+The agent packet `trace` command is classified as a deferred capability. Its removed event maps and non-Linux synthetic fallback were incompatible with the counter-only collector contract, so the active command now returns an explicit unsupported error.
+
+Current release classification: backend/SDK/local SQLite evaluation is locally ready; distributed evaluation deployment is blocked on Compose execution; production remains blocked. Measured local capacity and exact evidence are in `release-evidence/release-report.md`. No Datadog-scale or distributed throughput claim is made.

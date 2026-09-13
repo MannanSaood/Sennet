@@ -17,6 +17,30 @@ import (
 	"time"
 )
 
+func TestDevelopmentHumanBootstrapIsScopedAndIdempotent(t *testing.T) {
+	s, err := Open(t.TempDir() + "/development.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	for i := 0; i < 2; i++ {
+		if err := s.SeedDevelopmentHuman(ctx, "local"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, err := s.PrincipalForHuman(ctx, "development", "development-login", "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.WorkspaceID != "local" || p.Tenant != "local" || p.SubjectType != "human" || p.Role != "admin" {
+		t.Fatalf("unexpected development principal: %+v", p)
+	}
+	if _, err := s.PrincipalForHuman(ctx, "development", "development-login", "other"); err == nil {
+		t.Fatal("development identity crossed workspace scope")
+	}
+}
+
 func v2Call(h http.Handler, method, path, token, nonce string, body any) *httptest.ResponseRecorder {
 	return v2CallSignedPath(h, method, path, path, token, nonce, body)
 }

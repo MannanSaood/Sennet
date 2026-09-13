@@ -1,20 +1,10 @@
-//! Packet Trace Command (Phase 6.4)
-//!
-//! One-shot packet tracing for debugging.
-//! Usage: sennet trace [OPTIONS]
-//!
-//! Options:
-//!   --dst <IP[:PORT]>    Filter by destination
-//!   --src <IP[:PORT]>    Filter by source
-//!   --proto <tcp|udp|icmp>  Filter by protocol
-//!   --count <N>          Stop after N events (default: 20)
-//!   --timeout <SECS>     Stop after seconds (default: 30)
+//! Packet-event tracing is intentionally unavailable in the portable
+//! counter-only collector. The CLI remains so existing invocations receive an
+//! explicit error instead of fabricated or layout-dependent data.
 
 use anyhow::Result;
 use colored::Colorize;
-use std::time::{Duration, Instant};
 
-/// Filter configuration for tracing
 #[derive(Default, Debug)]
 pub struct TraceFilter {
     pub dst_ip: Option<String>,
@@ -33,49 +23,46 @@ impl TraceFilter {
             timeout_secs: 30,
             ..Default::default()
         };
-        
         let mut i = 0;
         while i < args.len() {
             match args[i].as_str() {
                 "--dst" => {
-                    if i + 1 < args.len() {
-                        let dst = &args[i + 1];
-                        if let Some((ip, port)) = dst.split_once(':') {
+                    if let Some(value) = args.get(i + 1) {
+                        if let Some((ip, port)) = value.split_once(':') {
                             filter.dst_ip = Some(ip.to_string());
                             filter.dst_port = port.parse().ok();
                         } else {
-                            filter.dst_ip = Some(dst.clone());
+                            filter.dst_ip = Some(value.clone());
                         }
                         i += 1;
                     }
                 }
                 "--src" => {
-                    if i + 1 < args.len() {
-                        let src = &args[i + 1];
-                        if let Some((ip, port)) = src.split_once(':') {
+                    if let Some(value) = args.get(i + 1) {
+                        if let Some((ip, port)) = value.split_once(':') {
                             filter.src_ip = Some(ip.to_string());
                             filter.src_port = port.parse().ok();
                         } else {
-                            filter.src_ip = Some(src.clone());
+                            filter.src_ip = Some(value.clone());
                         }
                         i += 1;
                     }
                 }
                 "--proto" => {
-                    if i + 1 < args.len() {
-                        filter.protocol = Some(args[i + 1].to_lowercase());
+                    if let Some(value) = args.get(i + 1) {
+                        filter.protocol = Some(value.to_lowercase());
                         i += 1;
                     }
                 }
                 "--count" | "-c" => {
-                    if i + 1 < args.len() {
-                        filter.count = args[i + 1].parse().unwrap_or(20);
+                    if let Some(value) = args.get(i + 1) {
+                        filter.count = value.parse().unwrap_or(20);
                         i += 1;
                     }
                 }
                 "--timeout" | "-t" => {
-                    if i + 1 < args.len() {
-                        filter.timeout_secs = args[i + 1].parse().unwrap_or(30);
+                    if let Some(value) = args.get(i + 1) {
+                        filter.timeout_secs = value.parse().unwrap_or(30);
                         i += 1;
                     }
                 }
@@ -83,335 +70,33 @@ impl TraceFilter {
             }
             i += 1;
         }
-        
         Ok(filter)
     }
 }
 
-/// Run the trace command
 pub fn run(args: &[String]) -> Result<()> {
-    let filter = TraceFilter::parse(args)?;
-    
-    println!("{}", "Sennet Packet Trace".bold());
-    println!("Watching for packet drops and netfilter events...");
-    println!();
-    
-    // Print active filters
-    if filter.dst_ip.is_some() || filter.src_ip.is_some() || filter.protocol.is_some() {
-        print!("Filters: ");
-        if let Some(ref dst) = filter.dst_ip {
-            print!("dst={}", dst.cyan());
-            if let Some(port) = filter.dst_port {
-                print!(":{}", port.to_string().cyan());
-            }
-            print!(" ");
-        }
-        if let Some(ref src) = filter.src_ip {
-            print!("src={}", src.cyan());
-            if let Some(port) = filter.src_port {
-                print!(":{}", port.to_string().cyan());
-            }
-            print!(" ");
-        }
-        if let Some(ref proto) = filter.protocol {
-            print!("proto={}", proto.cyan());
-        }
-        println!();
-    }
-    
-    println!("Limit: {} events, {}s timeout", 
-             filter.count.to_string().yellow(),
-             filter.timeout_secs.to_string().yellow());
-    println!("Press {} to stop early.", "Ctrl+C".bold());
-    println!("{}", "─".repeat(60));
-    
-    // Try to read from pinned maps
-    #[cfg(target_os = "linux")]
-    {
-        run_linux_trace(&filter)?;
-    }
-    
-    #[cfg(not(target_os = "linux"))]
-    {
-        run_mock_trace(&filter)?;
-    }
-    
-    Ok(())
+    let _ = TraceFilter::parse(args)?;
+    anyhow::bail!("packet-event tracing is unsupported by the portable counter-only collector; Sennet does not synthesize trace events")
 }
 
-#[cfg(target_os = "linux")]
-fn run_linux_trace(filter: &TraceFilter) -> Result<()> {
-    use std::path::Path;
-    use aya::maps::{Map, MapData, RingBuf};
-    use crate::ebpf::{DropEvent, NetfilterEvent, drop_reason_str, eth_proto_str, nf_hook_str, nf_verdict_str};
-    
-    let drop_path = Path::new("/sys/fs/bpf/sennet/drop_events");
-    let nf_path = Path::new("/sys/fs/bpf/sennet/nf_events");
-    
-    if !drop_path.exists() && !nf_path.exists() {
-        println!("{}: Pinned maps not found. Is the agent running?", "Warning".yellow());
-        println!("Run '{}' first, then use trace.", "sudo sennet".cyan());
-        return Ok(());
-    }
-    
-    // Open DROP_EVENTS RingBuf (Phase 6.1)
-    let mut drop_rb: Option<RingBuf<MapData>> = if drop_path.exists() {
-        match MapData::from_pin(drop_path) {
-            Ok(data) => {
-                let map = Map::RingBuf(data);
-                match map.try_into() {
-                    Ok(rb) => Some(rb),
-                    Err(e) => {
-                        eprintln!("{}: Failed to convert drop_events to RingBuf: {:?}", "Debug".blue(), e);
-                        None
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("{}: Failed to open drop_events from pin: {:?}", "Debug".blue(), e);
-                None
-            }
-        }
-    } else {
-        eprintln!("{}: drop_events path does not exist", "Debug".blue());
-        None
-    };
-    
-    // Open NF_EVENTS RingBuf (Phase 6.2)
-    let mut nf_rb: Option<RingBuf<MapData>> = if nf_path.exists() {
-        match MapData::from_pin(nf_path) {
-            Ok(data) => {
-                let map = Map::RingBuf(data);
-                match map.try_into() {
-                    Ok(rb) => Some(rb),
-                    Err(e) => {
-                        eprintln!("{}: Failed to convert nf_events to RingBuf: {:?}", "Debug".blue(), e);
-                        None
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("{}: Failed to open nf_events from pin: {:?}", "Debug".blue(), e);
-                None
-            }
-        }
-    } else {
-        eprintln!("{}: nf_events path does not exist", "Debug".blue());
-        None
-    };
-    
-    if drop_rb.is_none() && nf_rb.is_none() {
-        println!("{}: Could not open any event maps (see debug messages above)", "Warning".yellow());
-    }
-    
-    let start = Instant::now();
-    let timeout = Duration::from_secs(filter.timeout_secs);
-    let mut event_count = 0;
-    
-    println!();
-    println!("{:>8}  {:15}  {:10}  {}", "TIME", "REASON", "HOOK", "DETAILS");
-    println!("{}", "─".repeat(60));
-    
-    loop {
-        // Check limits
-        if event_count >= filter.count {
-            println!();
-            println!("{}: Reached {} event limit", "Done".green(), filter.count);
-            break;
-        }
-        if start.elapsed() > timeout {
-            println!();
-            println!("{}: Timeout after {}s", "Done".green(), filter.timeout_secs);
-            break;
-        }
-        
-        // Poll DROP_EVENTS (Phase 6.1)
-        if let Some(ref mut rb) = drop_rb {
-            while let Some(item) = rb.next() {
-                // Debug: show raw event data
-                if std::env::var("SENNET_DEBUG").is_ok() {
-                    eprintln!("Raw event bytes (len={}): {:02x?}", item.len(), &item[..item.len().min(24)]);
-                }
-                
-                if item.len() >= std::mem::size_of::<DropEvent>() {
-                    let event: DropEvent = unsafe {
-                        std::ptr::read_unaligned(item.as_ptr() as *const DropEvent)
-                    };
-                    
-                    // Debug: show parsed values
-                    if std::env::var("SENNET_DEBUG").is_ok() {
-                        eprintln!("Parsed: ts={}, reason={}, ifindex={}, proto={}, pad={}",
-                            event.timestamp_ns, event.reason, event.ifindex, event.protocol, event._pad);
-                    }
-                    
-                    // Apply protocol filter (Phase 6.4)
-                    // Note: kfree_skb protocol is ETH_P_* (Ethernet), not IP protocol
-                    // For now, filter by IP version: "ipv4", "ipv6", or skip filter for TCP/UDP/ICMP
-                    if let Some(ref proto_filter) = filter.protocol {
-                        let matches = match proto_filter.as_str() {
-                            "ipv4" => event.protocol == 0x0800,
-                            "ipv6" => event.protocol == 0x86DD,
-                            // TCP/UDP/ICMP filters don't apply to kfree_skb (no L4 info)
-                            _ => true, // Show all for unsupported filters
-                        };
-                        if !matches {
-                            continue; // Skip non-matching events
-                        }
-                    }
-                    
-                    let reason = drop_reason_str(event.reason);
-                    let elapsed = start.elapsed().as_secs_f64();
-                    
-                    // Color by severity
-                    let reason_colored = match event.reason {
-                        7 | 5 => reason.red(),      // NETFILTER_DROP, SOCKET_FILTER
-                        2 | 37 => reason.yellow(),  // NO_SOCKET, IP_OUTNOROUTES
-                        _ => reason.white(),
-                    };
-                    
-                    // Protocol from kfree_skb is Ethernet protocol (ETH_P_*)
-                    let proto = eth_proto_str(event.protocol);
-                    
-                    // Skip events with no valid data (stale/uninitialized)
-                    if event.timestamp_ns == 0 && event.reason == 0 && event.protocol == 0 {
-                        continue; // Skip empty/stale events
-                    }
-                    
-                    println!("{:>7.2}s  {:15}  {:10}  eth={}",
-                             elapsed,
-                             reason_colored,
-                             "-".white(),
-                             proto);
-                    
-                    event_count += 1;
-                    if event_count >= filter.count {
-                        break;
-                    }
-                }
-            }
-        }
-        
-        // Poll NF_EVENTS (Phase 6.2)
-        if let Some(ref mut rb) = nf_rb {
-            while let Some(item) = rb.next() {
-                if item.len() >= std::mem::size_of::<NetfilterEvent>() {
-                    let event: NetfilterEvent = unsafe {
-                        std::ptr::read_unaligned(item.as_ptr() as *const NetfilterEvent)
-                    };
-                    
-                    // Only show DROP verdicts by default
-                    if event.verdict != 0 {
-                        continue;
-                    }
-                    
-                    let elapsed = start.elapsed().as_secs_f64();
-                    let hook_name = nf_hook_str(event.hook);
-                    let verdict_name = nf_verdict_str(event.verdict);
-                    
-                    let reason = format!("NF_{}", verdict_name);
-                    let pf = match event.pf {
-                        2 => "IPv4",
-                        10 => "IPv6",
-                        _ => "?",
-                    };
-                    
-                    println!("{:>7.2}s  {:15}  {:10}  pf={} ifin={} ifout={}",
-                             elapsed,
-                             reason.red(),
-                             hook_name.cyan(),
-                             pf,
-                             event.ifindex_in,
-                             event.ifindex_out);
-                    
-                    event_count += 1;
-                    if event_count >= filter.count {
-                        break;
-                    }
-                }
-            }
-        }
-        
-        // Small sleep to avoid busy loop
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    
-    println!();
-    println!("Captured {} events in {:.1}s", event_count, start.elapsed().as_secs_f64());
-    
-    Ok(())
-}
-
-#[cfg(not(target_os = "linux"))]
-fn run_mock_trace(filter: &TraceFilter) -> Result<()> {
-    use std::thread;
-    
-    let start = Instant::now();
-    let timeout = Duration::from_secs(filter.timeout_secs);
-    let mut event_count = 0;
-    
-    let mock_events = vec![
-        ("NETFILTER_DROP", "INPUT", "192.168.1.5:443"),
-        ("NO_SOCKET", "PREROUTING", "10.0.0.1:8080"),
-        ("TCP_RESET", "OUTPUT", "172.16.0.1:22"),
-        ("IP_OUTNOROUTES", "FORWARD", "8.8.8.8:53"),
-    ];
-    
-    println!();
-    println!("{:>8}  {:15}  {:10}  {}", "TIME", "REASON", "HOOK", "DETAILS");
-    println!("{}", "─".repeat(60));
-    
-    loop {
-        if event_count >= filter.count || start.elapsed() > timeout {
-            break;
-        }
-        
-        // Simulate event
-        if rand::random::<u8>() > 240 {
-            let (reason, hook, details) = &mock_events[event_count % mock_events.len()];
-            let elapsed = start.elapsed().as_secs_f64();
-            
-            let reason_colored = if *reason == "NETFILTER_DROP" {
-                reason.red()
-            } else if *reason == "NO_SOCKET" || *reason == "IP_OUTNOROUTES" {
-                reason.yellow()
-            } else {
-                reason.white()
-            };
-            
-            println!("{:>7.2}s  {:15}  {:10}  dst={}",
-                     elapsed,
-                     reason_colored,
-                     hook.cyan(),
-                     details);
-            
-            event_count += 1;
-        }
-        
-        thread::sleep(Duration::from_millis(100));
-    }
-    
-    println!();
-    println!("Captured {} events in {:.1}s (mock mode)", event_count, start.elapsed().as_secs_f64());
-    
-    Ok(())
-}
-
-/// Print trace command help
 pub fn print_help() {
-    println!("{}", "sennet trace - One-shot packet tracing".bold());
+    println!(
+        "{}",
+        "sennet trace - unsupported packet-event tracing".bold()
+    );
     println!();
-    println!("{}", "USAGE:".yellow());
-    println!("    sennet trace [OPTIONS]");
-    println!();
-    println!("{}", "OPTIONS:".yellow());
-    println!("    {}        Filter by destination IP[:PORT]", "--dst <IP>".cyan());
-    println!("    {}        Filter by source IP[:PORT]", "--src <IP>".cyan());
-    println!("    {}   Filter by protocol (tcp, udp, icmp)", "--proto <P>".cyan());
-    println!("    {}      Stop after N events (default: 20)", "--count <N>".cyan());
-    println!("    {}   Stop after S seconds (default: 30)", "--timeout <S>".cyan());
-    println!();
-    println!("{}", "EXAMPLES:".yellow());
-    println!("    sennet trace                     # Trace all drops");
-    println!("    sennet trace --dst 10.0.0.5:443  # Filter by destination");
-    println!("    sennet trace --proto icmp -c 10  # Trace 10 ICMP drops");
+    println!("The portable collector reports TC packet/byte counters only.");
+    println!("Drop events, process attribution, and packet-event tracing are unavailable.");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trace_is_explicitly_unsupported() {
+        let error = run(&[]).unwrap_err();
+        assert!(error.to_string().contains("unsupported"));
+        assert!(error.to_string().contains("does not synthesize"));
+    }
 }
