@@ -119,8 +119,16 @@ func validateEvent(e *Event, enforceIngressTime bool) error {
 		}
 	}
 	if e.Signal == "finance" {
-		if e.Attributes["transaction_id"] == "" || e.Attributes["state"] == "" || len(e.Attributes["currency"]) != 3 || !money.MatchString(e.Attributes["amount"]) {
-			return errors.New("finance requires transaction_id, state, ISO currency and exact decimal amount")
+		if _, err := parseFinanceEvent(*e); err != nil {
+			return err
+		}
+		if len(e.Attributes["currency"]) != 3 {
+			return errors.New("finance currency must be a three-letter code")
+		}
+		switch e.Attributes["state"] {
+		case "authorized", "captured", "settled":
+		default:
+			return errors.New("unsupported payment lifecycle state")
 		}
 	}
 	return nil

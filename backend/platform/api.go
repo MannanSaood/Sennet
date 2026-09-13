@@ -248,7 +248,7 @@ func (a *API) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		respond(w, 200, agents)
-	case "/api/finance/reconciliation":
+	case "/api/finance/reconciliation", "/api/finance/timelines", "/api/finance/queue", "/api/finance/latency", "/api/finance/provider-errors", "/api/finance/dependency-impact":
 		a.finance(w, r)
 	case "/api/summary":
 		a.summary(w, r)

@@ -242,16 +242,16 @@ func TestFinanceExactAmountAndSequenceGap(t *testing.T) {
 	_, h, a, _ := fixture(t)
 	one := sample("f1")
 	one.Signal = "finance"
-	one.Attributes = map[string]string{"transaction_id": "tx", "state": "created", "currency": "USD", "amount": "9007199254740993.0001", "sequence": "1"}
+	one.Attributes = map[string]string{"finance.schema": FinanceSchemaV1, "transaction_id": "tx", "source_id": "bank", "provider": "processor", "account": "merchant-1", "state": "authorized", "currency": "USD", "amount": "9007199254740993.0001", "sequence": "1", "correction_version": "0", "receive_time_ms": strconv.FormatInt(one.Time+1, 10)}
 	two := one
 	two.ID = "f2"
 	two.Time++
-	two.Attributes = map[string]string{"transaction_id": "tx", "state": "settled", "currency": "USD", "amount": "9007199254740993.0001", "sequence": "3"}
+	two.Attributes = map[string]string{"finance.schema": FinanceSchemaV1, "transaction_id": "tx", "source_id": "bank", "provider": "processor", "account": "merchant-1", "state": "settled", "currency": "USD", "amount": "9007199254740993.0001", "sequence": "3", "correction_version": "0", "receive_time_ms": strconv.FormatInt(two.Time+1, 10)}
 	if w := call(h, "POST", "/api/events", a, map[string]any{"events": []Event{one, two}}); w.Code != 202 {
 		t.Fatal(w.Body.String())
 	}
 	w := call(h, "GET", "/api/finance/reconciliation?to="+strconv.FormatInt(time.Now().Add(time.Minute).UnixMilli(), 10), a, nil)
-	if w.Code != 200 || !strings.Contains(w.Body.String(), "9007199254740993.0001") || !strings.Contains(w.Body.String(), "sequence gap") {
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "9007199254740993.0001") || !strings.Contains(w.Body.String(), "sequence_gap") {
 		t.Fatal(w.Code, w.Body.String())
 	}
 }

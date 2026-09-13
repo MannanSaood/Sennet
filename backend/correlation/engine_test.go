@@ -15,7 +15,7 @@ func TestSyncCostsSurfacesProviderFailure(t *testing.T) {
 	}
 	defer database.Close()
 	registry := cloud.NewRegistry()
-	provider, err := cloud.NewAWSProvider("aws", &cloud.AWSConfig{})
+	provider, err := cloud.NewAWSProvider("aws", &cloud.AWSConfig{Region: "us-east-1", AccountID: "123456789012", WorkloadIdentityID: "test"}, cloud.EnvCredentials{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
