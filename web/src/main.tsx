@@ -6,6 +6,7 @@ import { ThemeProvider } from '@/context/ThemeContext'
 import { AuthProvider } from '@/context/AuthContext'
 import App from './App'
 import '@/index.css'
+import '@/overhaul.css'
 import { Toaster } from '@/components/ui/Toast'
 
 const queryClient = new QueryClient()

@@ -1,74 +1,17 @@
-import { useEffect, useState } from "react";
-import { useParams, useLocation } from "react-router-dom";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeHighlight from "rehype-highlight";
-import rehypeRaw from "rehype-raw";
-import { DocsLayout } from "./DocsLayout";
-import { Loader2 } from "lucide-react";
-import "highlight.js/styles/github-dark.css"; // or atom-one-dark
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useParams } from 'react-router-dom';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeHighlight from 'rehype-highlight';
+import rehypeRaw from 'rehype-raw';
+import { ArrowLeft, ArrowRight, Check, Copy, Loader2 } from 'lucide-react';
+import { DocsLayout } from './DocsLayout';
+import { docsNavigation } from '@/content/docs/navigation';
+import { ProductVideo } from '@/components/docs/ProductVideo';
+import 'highlight.js/styles/github-dark.css';
 
-// Glob import all markdown files
-const modules = import.meta.glob("/src/content/docs/*.md", { query: "?raw", import: "default" });
+const modules=import.meta.glob('/src/content/docs/*.md',{query:'?raw',import:'default'});
+const slugify=(value:string)=>value.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'');
+function CodeBlock({children}:{children?:React.ReactNode}){const [copied,setCopied]=useState(false);const text=String((children as {props?:{children?:unknown}})?.props?.children||'').replace(/\n$/,'');return <div className="code-block"><button aria-label="Copy code" onClick={()=>{void navigator.clipboard.writeText(text);setCopied(true);window.setTimeout(()=>setCopied(false),1200)}}>{copied?<Check/>:<Copy/>}{copied?'Copied':'Copy'}</button><pre>{children}</pre></div>}
 
-export function DocsPage() {
-    const { "*": splat } = useParams();
-    const [content, setContent] = useState<string | null>(null);
-    const [isLoading, setIsLoading] = useState(true);
-    const location = useLocation();
-
-    useEffect(() => {
-        const loadContent = async () => {
-            setIsLoading(true);
-            try {
-                // Default to introduction if root docs path
-                const slug = splat || "introduction";
-                const path = `/src/content/docs/${slug}.md`;
-
-                const loader = modules[path];
-
-                if (loader) {
-                    const text = await loader();
-                    setContent(text as string);
-                } else {
-                    setContent("# 404 Not Found\n\nThis page does not exist.");
-                }
-            } catch (err) {
-                console.error("Failed to load docs:", err);
-                setContent("# Error\n\nFailed to load documentation.");
-            } finally {
-                setIsLoading(false);
-            }
-        };
-
-        loadContent();
-    }, [splat, location.pathname]);
-
-    return (
-        <DocsLayout>
-            {isLoading ? (
-                <div className="flex items-center justify-center h-64">
-                    <Loader2 className="w-8 h-8 animate-spin text-accent" />
-                </div>
-            ) : (
-                <article className="prose prose-invert prose-slate max-w-none 
-          prose-headings:font-bold prose-headings:tracking-tight 
-          prose-h1:text-4xl prose-h1:text-white prose-h1:mb-8
-          prose-h2:text-2xl prose-h2:text-white prose-h2:mt-12 prose-h2:mb-4 prose-h2:border-b prose-h2:border-white/10 prose-h2:pb-2
-          prose-p:text-text-secondary prose-p:leading-7
-          prose-a:text-accent prose-a:no-underline hover:prose-a:underline
-          prose-strong:text-white
-          prose-code:text-accent-alt prose-code:bg-white/5 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none
-          prose-pre:bg-[#0d1117] prose-pre:border prose-pre:border-white/10 prose-pre:rounded-xl
-        ">
-                    <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        rehypePlugins={[rehypeRaw, rehypeHighlight]}
-                    >
-                        {content || ""}
-                    </ReactMarkdown>
-                </article>
-            )}
-        </DocsLayout>
-    );
-}
+export function DocsPage(){const {'*':splat}=useParams();const slug=splat||'introduction';const [loaded,setLoaded]=useState<{slug:string;text:string}>({slug:'',text:''});const content=loaded.slug===slug?loaded.text:'';const loading=loaded.slug!==slug;const article=useRef<HTMLElement>(null);const entry=docsNavigation.find(item=>item.slug===slug);const index=docsNavigation.findIndex(item=>item.slug===slug);useEffect(()=>{let active=true;const loader=modules[`/src/content/docs/${slug}.md`];const request=loader?loader():Promise.resolve('# Page unavailable\n\nThis documentation page does not exist.');void request.then(value=>{if(active)setLoaded({slug,text:value as string})}).catch(()=>{if(active)setLoaded({slug,text:'# Documentation unavailable\n\nThe page could not be loaded.'})});return()=>{active=false}},[slug]);const toc=useMemo(()=>[...content.matchAll(/^##\s+(.+)$/gm)].map(match=>({label:match[1].replace(/[`*_]/g,''),id:slugify(match[1])})),[content]);useEffect(()=>{article.current?.focus({preventScroll:true})},[slug]);const previous=docsNavigation[index-1],next=docsNavigation[index+1];return <DocsLayout toc={toc}><article id="top" ref={article} tabIndex={-1} className="docs-article"><header className="docs-article__header"><span className="section-index">{entry?.section||'DOCUMENTATION'} / {String(Math.max(1,index+1)).padStart(2,'0')}</span><p>{entry?.description}</p></header>{entry?.video?<ProductVideo {...entry.video} title={entry.title} transcript="Sennet follows one request through gateway admission, agent handoffs, model and tool calls, application services, network transmission, financial state, and the final result. Every relationship shown must come from trace parents, span links, or explicit domain identifiers."/>:null}{loading?<div className="docs-loading"><Loader2/> Loading page</div>:<ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw,rehypeHighlight]} components={{h2:({children,...props})=><h2 id={slugify(String(children))} {...props}>{children}</h2>,pre:({children})=><CodeBlock>{children}</CodeBlock>}}>{content}</ReactMarkdown>}<nav className="docs-pager" aria-label="Previous and next pages"><div>{previous?<Link to={previous.slug==='introduction'?'/docs':`/docs/${previous.slug}`}><ArrowLeft/><span><small>Previous</small>{previous.title}</span></Link>:null}</div><div>{next?<Link to={`/docs/${next.slug}`}><span><small>Next</small>{next.title}</span><ArrowRight/></Link>:null}</div></nav></article></DocsLayout>}

@@ -1,6 +1,7 @@
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { Loader2 } from "lucide-react";
+import { SennetMark } from "@/components/brand/SennetLogo";
 
 export function ProtectedRoute({ children }: { children: React.ReactNode }) {
     const { user, isLoading } = useAuth();
@@ -8,8 +9,9 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
     if (isLoading) {
         return (
-            <div className="min-h-screen flex items-center justify-center bg-dark-bg text-accent">
-                <Loader2 className="w-8 h-8 animate-spin" />
+            <div className="route-loader" role="status" aria-label="Verifying workspace access">
+                <SennetMark title="" /><Loader2 />
+                <span>Verifying workspace boundary</span>
             </div>
         );
     }

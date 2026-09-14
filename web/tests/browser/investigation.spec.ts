@@ -44,14 +44,14 @@ test('filter, pagination, trace drilldown, and keyboard dialog navigation', asyn
 
 test('saved dashboard and partial analytical state', async ({page}) => {
   await mock(page,{partial:true}); await page.goto('/dashboard');
-  await expect(page.getByText('Checkout health v1')).toBeVisible(); await page.getByRole('button',{name:'Save',exact:true}).last().click(); await expect(page.getByText(/immutable version saved/)).toBeVisible();
+  await expect(page.getByText('Checkout health v1')).toBeVisible(); await page.getByRole('button',{name:'Save dashboard'}).click(); await expect(page.getByText(/immutable version saved/)).toBeVisible();
   await expect(page.getByRole('button',{name:/^Version /})).toBeVisible();
   await page.goto('/dashboard/metrics'); await expect(page.getByText(/Budget limit: row_budget/)).toBeVisible();
 });
 
 test('server topology, histogram, formula, and operational contracts', async ({page}) => {
   await mock(page); await page.goto('/dashboard/map'); await expect(page.getByRole('button',{name:/checkout 120 calls/})).toBeVisible();
-  await page.goto('/dashboard/metrics'); await page.getByLabel('Operation').selectOption('histogram'); await page.getByLabel('Formula').fill('A*2'); await page.getByRole('button',{name:'Apply formula'}).click(); await expect(page.getByText(/A\*2 · histogram/)).toBeVisible();
+  await page.goto('/dashboard/metrics'); await page.getByLabel('Operation').selectOption('histogram'); await page.getByLabel('Formula').fill('A*2'); await page.getByRole('button',{name:'Run query'}).click(); await expect(page.getByText(/A\*2 · histogram/)).toBeVisible();
   await page.goto('/dashboard'); await expect(page.getByText('gateway append')).toBeVisible();
   await page.goto('/dashboard/alerts'); await expect(page.getByText('Pending transitions')).toBeVisible(); await expect(page.getByText('Not configured')).toBeVisible();
 });
@@ -65,4 +65,31 @@ test('mobile investigation layout', async ({page}, info) => {
   test.skip(info.project.name!=='mobile','mobile project'); await mock(page); await page.goto('/dashboard/logs');
   await expect(page.getByLabel('Investigation scope')).toBeVisible(); await expect(page.getByRole('heading',{name:'Logs'})).toBeVisible();
   await page.screenshot({path:'../docs/workstreams/assets/investigation-mobile.png',fullPage:true});
+});
+
+test('protected routes do not flash workspace content', async ({page}) => {
+  await page.route('**/api/session',async route=>{await new Promise(resolve=>setTimeout(resolve,250));await route.fulfill({status:401,json:{error:'unauthenticated'}})});
+  await page.goto('/dashboard');
+  await expect(page.getByRole('heading',{name:'Investigation overview'})).toHaveCount(0);
+  await expect(page.getByRole('heading',{name:'Open your workspace.'})).toBeVisible();
+});
+
+test('brand, docs, URL restoration, reduced motion, and overflow', async ({page}) => {
+  const consoleErrors:string[]=[]; page.on('console',message=>{if(message.type()==='error')consoleErrors.push(message.text())});
+  await mock(page);
+  await page.emulateMedia({reducedMotion:'reduce'});
+  await page.goto('/'); await expect(page.getByRole('heading',{name:/Follow the evidence/})).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('lang','en');
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth-document.documentElement.clientWidth)).toBe(0);
+  for(const asset of ['/brand/favicon.svg','/brand/sennet-symbol-dark.svg','/brand/sennet-wordmark-light.svg','/brand/sennet-og-lockup.svg']) {
+    expect((await page.request.get(asset)).status()).toBe(200);
+  }
+  await page.goto('/docs/overview-video'); await expect(page.getByRole('heading',{name:'Two-minute overview',level:1})).toBeVisible();
+  await expect(page.getByText(/Final footage is not yet available/)).toBeVisible();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth-document.documentElement.clientWidth)).toBe(0);
+  await page.goto('/dashboard/traces?visualization=transmission&environment=evaluation');
+  await expect(page.getByText('Environment filter unavailable')).toBeVisible();
+  await expect(page.getByRole('combobox',{name:'Visualization'})).toHaveValue('transmission');
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth-document.documentElement.clientWidth)).toBe(0);
+  expect(consoleErrors).toEqual([]);
 });

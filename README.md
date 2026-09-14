@@ -12,6 +12,9 @@ Generate a random bootstrap credential and put it in your shell as `INIT_API_KEY
 
 ```powershell
 $env:INIT_API_KEY = 'sk_' + [guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')
+$env:SENNET_AUTH_MODE = 'development'
+$env:SENNET_DEVELOPMENT_SESSION_TOKEN = 'replace-with-a-local-random-token'
+$env:SENNET_DEVELOPMENT_TENANT = 'local'
 cd backend
 go run .
 ```
@@ -19,12 +22,14 @@ go run .
 In a second terminal:
 
 ```sh
+$env:VITE_SENNET_DEVELOPMENT_SESSION_TOKEN = $env:SENNET_DEVELOPMENT_SESSION_TOKEN
+$env:VITE_SENNET_DEVELOPMENT_TENANT = $env:SENNET_DEVELOPMENT_TENANT
 cd web
 npm ci
 npm run dev
 ```
 
-Open http://localhost:5173 and connect using the bootstrap key. The development server proxies requests to localhost:8080. The backend binds to loopback by default. Create an **ingestion-only** key in Workspace for collectors; use a reader key for read-only users.
+Open http://localhost:5173. The development-only session token is accepted only when `SENNET_AUTH_MODE=development`; production builds ignore the matching Vite variables. The development server proxies requests to localhost:8080, and the backend binds to loopback by default. Create an **ingestion-only** key in Workspace for collectors; use a reader key for read-only users.
 
 For optional, clearly identified evaluation data, set `SENNET_API_KEY` to an ingestion key and run:
 

@@ -60,7 +60,7 @@ export function RegisterPage() {
     return (
         <AuthLayout
             title="Create an account"
-            description="Get started with Sennet today. No credit card required."
+            description="Create an identity for a configured Sennet deployment. Workspace access is assigned by the server."
         >
             <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
                 <Input

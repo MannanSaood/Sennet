@@ -8,6 +8,8 @@
 | SENNET_AUTH_MODE | `firebase` in production; `development` only for local evaluation |
 | FIREBASE_SERVICE_ACCOUNT_JSON / PATH | Firebase Admin identity used to verify login tokens |
 | SENNET_DEVELOPMENT_SESSION_TOKEN / TENANT | Local evaluation identity; forbidden in production |
+| VITE_SENNET_DEVELOPMENT_SESSION_TOKEN | Optional Vite-development browser token matching the local backend; ignored by production builds |
+| VITE_SENNET_DEVELOPMENT_TENANT | Local workspace header paired with the Vite development token |
 | SENNET_BIND / PORT | Bind address (default loopback) and port (8080) |
 | SENNET_ALLOWED_ORIGINS | Exact comma-separated browser origins; no wildcard |
 | SENNET_CLICKHOUSE_URL / USER / PASSWORD | Analytical backend endpoint and credentials |
