@@ -8,5 +8,6 @@ This folder holds final browser screenshots and verification notes for the immer
 - `workspace-transmission.png` — real local backend, transmission visualization, 60 events in the active window.
 - `workspace-tablet.png` — real local backend workspace at 1024 px.
 - `logo-proportion-review.png` — revised signal-aperture lockup at its real 34 px navigation size.
+- `loading-screen.png` — the branded workspace-boundary loading state captured while authentication is intentionally delayed.
 
 See `verification.md` for commands, coverage, accessibility checks, and bundle measurements.

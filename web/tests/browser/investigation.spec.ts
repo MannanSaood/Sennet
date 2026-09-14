@@ -68,9 +68,15 @@ test('mobile investigation layout', async ({page}, info) => {
 });
 
 test('protected routes do not flash workspace content', async ({page}) => {
-  await page.route('**/api/session',async route=>{await new Promise(resolve=>setTimeout(resolve,250));await route.fulfill({status:401,json:{error:'unauthenticated'}})});
-  await page.goto('/dashboard');
+  await page.route('**/api/session',async route=>{await new Promise(resolve=>setTimeout(resolve,800));await route.fulfill({status:401,json:{error:'unauthenticated'}})});
+  const navigation=page.goto('/dashboard');
+  await expect(page.getByRole('status',{name:'Verifying workspace boundary'})).toBeVisible();
+  await expect(page.getByText('Identity / tenant / role')).toBeVisible();
+  await page.screenshot({path:'../docs/release-evidence/visual/loading-screen.png',fullPage:true});
+  await page.emulateMedia({reducedMotion:'reduce'});
+  await expect(page.locator('.signal-loader__route')).toHaveCSS('animation-name','none');
   await expect(page.getByRole('heading',{name:'Investigation overview'})).toHaveCount(0);
+  await navigation;
   await expect(page.getByRole('heading',{name:'Open your workspace.'})).toBeVisible();
 });
 
