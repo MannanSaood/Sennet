@@ -1,14 +1,14 @@
 # Sennet brand guide
 
-## Direction: the evidence route
+## Direction: the signal aperture
 
-The Sennet mark is one routed `S` path crossing four fixed observation points. Signal amber and mineral blue mark transmission from an originating event to resolved evidence. The open construction avoids enclosure, security-shield symbolism, and implied omniscience.
+The Sennet mark combines two balanced observation fields around one routed `S` path. The opposing fields create a stable circular footprint while the open center keeps the signal route legible. Signal amber and mineral blue mark transmission from an originating event to resolved evidence. The construction suggests observation and convergence without becoming an eye, shield, or generic enclosure.
 
-The chosen direction followed exploration of routed S, convergence, layered evidence, orbital signal, split field, and branch-to-result concepts. The routed S produced the clearest small-size silhouette and the strongest connection to the interaction system.
+The chosen direction followed exploration of routed S, convergence, layered evidence, orbital signal, split field, and branch-to-result concepts. The revised signal aperture keeps the routed-S idea but gives it the balanced mass and compact silhouette selected during visual review.
 
 ## Construction and spacing
 
-The master symbol uses a 48 × 48 unit grid, a 5-unit round stroke, two 4-unit terminal nodes, and two 2.6-unit observation nodes. Preserve clear space equal to one terminal-node diameter (8 units) on every side. Do not optically close the route or add a containing shape.
+The master symbol uses a 64 × 64 unit grid, two opposing fields, a 4.5-unit round route, and two 5.5-unit terminal nodes. Preserve clear space equal to one terminal-node diameter (11 units) on every side. Keep both fields optically equal in weight and never close the central aperture.
 
 Horizontal wordmarks use the mark at 48 units high followed by a custom path-built uppercase wordmark. The React product lockup uses the same symbol with the display typography for efficient UI rendering.
 
@@ -50,7 +50,7 @@ Display headings use a condensed sans-serif stack (`Arial Narrow`, `Roboto Conde
 
 - Do not add gradients, outer glow, glass panels, shadows, or a shield/hexagon container.
 - Do not recolor nodes arbitrarily or use amber/blue as decoration.
-- Do not stretch, rotate, outline, or rearrange the path and nodes.
+- Do not stretch, rotate, outline, rearrange the path and nodes, or change one field without optically balancing the other.
 - Do not animate the logo continuously in navigation.
 - Do not place the wordmark over low-contrast telemetry.
 
